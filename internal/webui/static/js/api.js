@@ -96,6 +96,17 @@ const API = (() => {
       return request('POST', '/api/testmode', { enabled });
     },
 
+    // 调试：发送模拟消息
+    async debugMessage(platform, message, userId = 'debug_user', groupId = 'debug_group', messageType = 'private') {
+      return request('POST', '/api/debug/message', {
+        platform,
+        message,
+        user_id: userId,
+        group_id: groupId,
+        message_type: messageType,
+      });
+    },
+
     // WebSocket URL
     wsUrl() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';

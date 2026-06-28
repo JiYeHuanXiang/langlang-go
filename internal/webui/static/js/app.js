@@ -84,6 +84,7 @@
     plugins:   { title: '插件管理', render: renderPlugins },
     editor:    { title: '脚本编辑', render: renderEditor },
     logs:      { title: '运行日志', render: renderLogs },
+    debug:     { title: '调试', render: renderDebug },
     settings:  { title: '系统设置', render: renderSettings },
   };
 
@@ -487,6 +488,152 @@
     showToast('已格式化', 'info');
   };
 
+  // ==================== 调试页面 ====================
+  let debugHistory = [];
+
+  async function renderDebug() {
+    // 始终显示所有支持的模拟平台，不依赖实际配置
+    let configuredPlatforms = ['onebot11', 'telegram', 'debug'];
+    try {
+      const st = await API.getStatus();
+      const cfgPlatforms = st.configured_platforms || [];
+      if (cfgPlatforms.length > 0) {
+        // 合并：已有平台 + 始终兜底 debug
+        configuredPlatforms = [...new Set([...cfgPlatforms, 'debug'])];
+      }
+    } catch (_) {}
+
+    const platformOptions = configuredPlatforms.map(p => {
+      const labels = { onebot11: 'OneBot11', telegram: 'Telegram', debug: 'Debug（通用）' };
+      return `<option value="${p}">${labels[p] || p}</option>`;
+    }).join('');
+
+    content.innerHTML = `
+      <div class="debug-layout">
+        <div class="debug-form card">
+          <div class="card-header"><h3>🐛 本地调试</h3></div>
+          <div class="card-body">
+            <div class="form-group">
+              <label>模拟平台</label>
+              <select class="form-control" id="debugPlatform">${platformOptions}</select>
+            </div>
+            <div class="form-group">
+              <label>消息类型</label>
+              <select class="form-control" id="debugMsgType">
+                <option value="private">私聊 (private)</option>
+                <option value="group">群组 (group)</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <div class="form-group form-group-half">
+                <label>用户 ID</label>
+                <input class="form-control" id="debugUserId" value="debug_user" placeholder="debug_user">
+              </div>
+              <div class="form-group form-group-half">
+                <label>群组 / 频道 ID</label>
+                <input class="form-control" id="debugGroupId" value="debug_group" placeholder="debug_group">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>消息内容</label>
+              <textarea class="form-control debug-msg-input" id="debugMessage" rows="4" placeholder="输入要调试的消息...
+例如: 【输出】@你好世界"></textarea>
+            </div>
+            <button class="btn btn-primary" onclick="sendDebugMessage()">🚀 发送调试消息</button>
+            <span id="debugResult" style="margin-left:12px;font-size:13px"></span>
+          </div>
+        </div>
+
+        <div class="debug-history card">
+          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <h3>📋 发送历史</h3>
+            <button class="btn btn-secondary btn-sm" onclick="clearDebugHistory()">清除</button>
+          </div>
+          <div class="card-body" id="debugHistoryList">
+            ${debugHistory.length === 0
+              ? '<div class="empty-state"><p>暂无发送记录</p></div>'
+              : renderDebugHistory()
+            }
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderDebugHistory() {
+    return debugHistory.slice().reverse().map((item, i) => `
+      <div class="debug-history-item">
+        <div class="debug-history-meta">
+          <span class="badge badge-primary">${escapeHtml(item.platform)}</span>
+          <span class="badge badge-secondary">${escapeHtml(item.messageType)}</span>
+          <span style="font-size:12px;color:var(--text-muted)">→ ${escapeHtml(item.msgPreview)}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted)">
+          user=${escapeHtml(item.userId)} group=${escapeHtml(item.groupId)} · ${item.time}
+        </div>
+      </div>`).join('');
+  }
+
+  window.sendDebugMessage = async function() {
+    const platform = document.getElementById('debugPlatform')?.value || 'debug';
+    const messageType = document.getElementById('debugMsgType')?.value || 'private';
+    const userId = document.getElementById('debugUserId')?.value?.trim() || 'debug_user';
+    const groupId = document.getElementById('debugGroupId')?.value?.trim() || 'debug_group';
+    const message = document.getElementById('debugMessage')?.value?.trim();
+
+    if (!message) {
+      showToast('请输入消息内容', 'error');
+      return;
+    }
+
+    const resultEl = document.getElementById('debugResult');
+    if (resultEl) {
+      resultEl.textContent = '发送中...';
+      resultEl.style.color = 'var(--text-secondary)';
+    }
+
+    try {
+      await API.debugMessage(platform, message, userId, groupId, messageType);
+      if (resultEl) {
+        resultEl.textContent = '✅ 已发送';
+        resultEl.style.color = '#27ae60';
+      }
+
+      // 记录到历史
+      debugHistory.push({
+        platform,
+        messageType,
+        userId,
+        groupId,
+        msgPreview: message.length > 40 ? message.slice(0, 40) + '...' : message,
+        time: new Date().toLocaleTimeString(),
+      });
+
+      // 刷新历史区域
+      const histEl = document.getElementById('debugHistoryList');
+      if (histEl) {
+        histEl.innerHTML = renderDebugHistory();
+      }
+
+      // 3 秒后清除结果文字
+      setTimeout(() => {
+        if (resultEl) { resultEl.textContent = ''; }
+      }, 3000);
+    } catch (err) {
+      if (resultEl) {
+        resultEl.textContent = `❌ ${err.message}`;
+        resultEl.style.color = '#e74c3c';
+      }
+    }
+  };
+
+  window.clearDebugHistory = function() {
+    debugHistory = [];
+    const histEl = document.getElementById('debugHistoryList');
+    if (histEl) {
+      histEl.innerHTML = '<div class="empty-state"><p>暂无发送记录</p></div>';
+    }
+  };
+
   // ==================== 日志查看 ====================
   let logLines = [];
 
@@ -509,7 +656,9 @@
             <input type="checkbox" id="logFilterError" checked> ERROR
           </label>
         </div>
-        <div class="log-container" id="logContainer"></div>
+        <div class="log-container" id="logContainer">
+          <div class="log-line info">⏳ 正在连接日志流...</div>
+        </div>
       </div>`;
 
     logLines = [];
@@ -574,11 +723,14 @@
     wsCloseRequested = false;
 
     try {
-      const ws = new WebSocket(API.wsUrl());
+      const url = API.wsUrl();
+      console.info('[Log] connecting to', url);
+      const ws = new WebSocket(url);
       state.ws = ws;
 
       ws.onopen = () => {
-        appendLog('info', '已连接到日志流', new Date().toLocaleTimeString());
+        console.info('[Log] ws connected');
+        appendLog('info', '✅ 已连接到日志流', new Date().toLocaleTimeString());
       };
 
       ws.onmessage = (e) => {
@@ -587,11 +739,21 @@
           if (data.type === 'log') {
             appendLog(data.level || 'info', data.msg || '', data.time || '');
           }
-        } catch (_) {}
+        } catch (err) {
+          console.warn('[Log] parse error', err);
+        }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (e) => {
+        console.warn('[Log] ws closed', e.code, e.reason);
         state.ws = null;
+        const container = document.getElementById('logContainer');
+        if (container) {
+          const el = document.createElement('div');
+          el.className = 'log-line warn';
+          el.textContent = `⏸ 连接已断开 (code=${e.code})，${!wsCloseRequested ? '3秒后自动重连...' : '已离开日志页'}`;
+          container.appendChild(el);
+        }
         if (!wsCloseRequested && state.currentPage === 'logs') {
           state.wsReconnectTimer = setTimeout(() => {
             state.wsReconnectTimer = null;
@@ -600,10 +762,15 @@
         }
       };
 
-      ws.onerror = () => {
-        ws.close();
+      ws.onerror = (e) => {
+        console.error('[Log] ws error', e);
+        appendLog('error', '❌ WebSocket 连接失败', new Date().toLocaleTimeString());
+        // 不在这里 close，onerror 后会自动触发 onclose
       };
-    } catch (_) {}
+    } catch (err) {
+      console.error('[Log] ws constructor failed', err);
+      appendLog('error', `❌ 无法创建 WebSocket: ${err.message}`, new Date().toLocaleTimeString());
+    }
   }
 
   // ==================== 设置 ====================

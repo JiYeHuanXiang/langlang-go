@@ -481,6 +481,74 @@ textarea.form-control {
   max-width: 400px;
 }
 
+/* ===== 调试页面 ===== */
+.debug-layout {
+  display: flex;
+  gap: 20px;
+  height: 100%;
+}
+
+.debug-form {
+  flex: 1;
+  min-width: 0;
+  max-width: 500px;
+}
+
+.debug-history {
+  flex: 1;
+  min-width: 0;
+  max-width: 420px;
+}
+
+.debug-msg-input {
+  font-family: var(--font-mono) !important;
+  font-size: 14px !important;
+  resize: vertical;
+}
+
+.debug-history-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.debug-history-item:last-child {
+  border-bottom: none;
+}
+
+.debug-history-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.form-group-half {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .debug-layout {
+    flex-direction: column;
+  }
+
+  .debug-form,
+  .debug-history {
+    max-width: none;
+  }
+
+  .form-row {
+    flex-direction: column;
+    gap: 0;
+  }
+}
+
 /* ===== 标签 ===== */
 .badge {
   display: inline-block;
@@ -494,6 +562,8 @@ textarea.form-control {
 .badge-danger { background: #e74c3c; color: #fff; }
 .badge-warning { background: #f39c12; color: #fff; }
 .badge-info { background: #3498db; color: #fff; }
+.badge-primary { background: var(--red-primary); color: #fff; }
+.badge-secondary { background: #666; color: #fff; }
 
 /* ===== 弹窗 ===== */
 .modal-overlay {

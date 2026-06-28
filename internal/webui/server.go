@@ -4,9 +4,7 @@ package webui
 
 import (
 	"context"
-	"crypto/sha1"
 	"embed"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,9 +16,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/super1207/langlang-go/internal/bot"
 	"github.com/super1207/langlang-go/internal/config"
 	"github.com/super1207/langlang-go/internal/db"
+	"github.com/super1207/langlang-go/internal/event"
 	"github.com/super1207/langlang-go/internal/log"
 	"github.com/super1207/langlang-go/internal/lua"
 	"github.com/super1207/langlang-go/internal/plugin"
@@ -29,8 +30,6 @@ import (
 
 //go:embed all:static
 var staticFiles embed.FS
-
-const wsGUID = "258EAFA5-E914-47DA-95CA-5AB5E6D3C4FD"
 
 // Server Web UI 服务器
 type Server struct {
@@ -62,6 +61,9 @@ func (s *Server) Start() error {
 		return nil
 	}
 
+	// 注册日志广播器，使 log.Info/Warn/Error 通过 WebSocket 推送到前端
+	log.SetBroadcaster(s.BroadcastLog)
+
 	mux := http.NewServeMux()
 
 	// API 路由（cors → auth → handler）
@@ -78,6 +80,7 @@ func (s *Server) Start() error {
 	mux.Handle("/api/bot/", s.cors(http.HandlerFunc(s.handleBot)))
 	mux.Handle("/api/testmode", apiAuth(s.handleTestMode))
 	mux.Handle("/ws", s.cors(http.HandlerFunc(s.handleWebSocket)))
+	mux.Handle("/api/debug/message", apiAuth(s.handleDebugMessage))
 
 	// 静态文件（从嵌入的 FS 中读取，无需外部目录）
 	mux.Handle("/", s.cors(http.HandlerFunc(s.serveStatic)))
@@ -228,13 +231,23 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+		// 收集已配置的平台列表
+	configuredPlatforms := make([]string, 0)
+	if len(s.cfg.Bot.OneBot11) > 0 {
+		configuredPlatforms = append(configuredPlatforms, "onebot11")
+	}
+	if len(s.cfg.Bot.Telegram) > 0 {
+		configuredPlatforms = append(configuredPlatforms, "telegram")
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"code":      0,
-		"version":   "0.1.0",
-		"uptime":    uptime,
-		"plugins":   s.plugins.Count(),
-		"test_mode": testModeStr,
-		"bots":      bots,
+		"code":                 0,
+		"version":              "0.1.0",
+		"uptime":               uptime,
+		"plugins":              s.plugins.Count(),
+		"test_mode":            testModeStr,
+		"bots":                 bots,
+		"configured_platforms": configuredPlatforms,
 	})
 }
 
@@ -573,52 +586,122 @@ func (s *Server) handleTestMode(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ==================== API: 调试消息 ====================
+
+func (s *Server) handleDebugMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": -1, "msg": "method not allowed"})
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "read body failed"})
+		return
+	}
+
+	var req struct {
+		Platform    string `json:"platform"`
+		Message     string `json:"message"`
+		UserID      string `json:"user_id"`
+		GroupID     string `json:"group_id"`
+		MessageType string `json:"message_type"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "invalid json"})
+		return
+	}
+
+	if req.Message == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "message is required"})
+		return
+	}
+
+	platform := req.Platform
+	if platform == "" {
+		platform = "debug"
+	}
+	userID := req.UserID
+	if userID == "" {
+		userID = "debug_user"
+	}
+	groupID := req.GroupID
+	if groupID == "" {
+		groupID = "debug_group"
+	}
+	messageType := req.MessageType
+	if messageType == "" {
+		messageType = "private"
+	}
+
+	// 构造事件 JSON，适配 onebot11 / telegram / debug 格式
+	var evtMap map[string]any
+	switch platform {
+	case "telegram":
+		evtMap = map[string]any{
+			"self_id":      "debug_bot",
+			"message_id":   fmt.Sprintf("debug_%d", time.Now().UnixNano()),
+			"user_id":      userID,
+			"group_id":     groupID,
+			"message":      req.Message,
+			"raw_message":  req.Message,
+			"message_type": messageType,
+			"post_type":    "message",
+			"platform":     "telegram",
+			"time":         time.Now().Unix(),
+		}
+	default:
+		// onebot11 / debug 通用格式
+		evtMap = map[string]any{
+			"self_id":      "debug_bot",
+			"message_id":   fmt.Sprintf("debug_%d", time.Now().UnixNano()),
+			"user_id":      userID,
+			"group_id":     groupID,
+			"message":      req.Message,
+			"raw_message":  req.Message,
+			"message_type": messageType,
+			"post_type":    "message",
+			"platform":     platform,
+			"time":         time.Now().Unix(),
+		}
+	}
+
+	data, err := json.Marshal(evtMap)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": -1, "msg": "marshal event failed"})
+		return
+	}
+
+	// 分发到事件系统
+	if err := event.GlobalDispatcher.DispatchJSON(platform, data); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": -1, "msg": fmt.Sprintf("dispatch failed: %v", err)})
+		return
+	}
+
+	log.Info("调试消息已分发",
+		"platform", platform,
+		"user_id", userID,
+		"group_id", groupID,
+		"message_type", messageType,
+		"message", req.Message,
+	)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"code": 0,
+		"msg":  "调试消息已发送",
+	})
+}
+
 // ==================== WebSocket ====================
 
+var wsUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
-		return
-	}
-
-	conn, bufrw, err := hj.Hijack()
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// 读取客户端 WebSocket 握手请求，提取 Sec-WebSocket-Key
-	req, err := http.ReadRequest(bufrw.Reader)
-	if err != nil {
-		conn.Close()
-		return
-	}
-
-	clientKey := req.Header.Get("Sec-WebSocket-Key")
-	if clientKey == "" {
-		conn.Close()
-		return
-	}
-
-	// 计算 Sec-WebSocket-Accept
-	h := sha1.New()
-	h.Write([]byte(clientKey + wsGUID))
-	acceptKey := base64.StdEncoding.EncodeToString(h.Sum(nil))
-
-	// 发送符合 RFC 6455 的握手响应
-	resp := "HTTP/1.1 101 Switching Protocols\r\n" +
-		"Upgrade: websocket\r\n" +
-		"Connection: Upgrade\r\n" +
-		"Sec-WebSocket-Accept: " + acceptKey + "\r\n" +
-		"\r\n"
-
-	if _, err := bufrw.WriteString(resp); err != nil {
-		conn.Close()
-		return
-	}
-	if err := bufrw.Flush(); err != nil {
-		conn.Close()
+		log.Error("WebSocket 握手失败", "error", err)
 		return
 	}
 
@@ -636,31 +719,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.hub.Unregister <- client
 		}()
 		for msg := range client.send {
-			frame := encodeWSFrame(true, 0x1, msg)
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if _, err := conn.Write(frame); err != nil {
+			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				return
 			}
 		}
 	}()
 
-	// 读协程：等待客户端发来的 close/ping 帧或连接断开
-	readBuf := make([]byte, 1024)
+	// 读协程：维持连接，自动处理 ping/pong/close 帧
+	conn.SetReadLimit(4096)
 	for {
 		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		n, err := conn.Read(readBuf)
-		if err != nil {
+		if _, _, err := conn.ReadMessage(); err != nil {
 			break
-		}
-		if n >= 2 {
-			opcode := readBuf[0] & 0x0F
-			if opcode == 0x8 {
-				// 收到 close 帧，回一个 close 帧
-				closeFrame := encodeWSFrame(true, 0x8, nil)
-				conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-				conn.Write(closeFrame)
-				break
-			}
 		}
 	}
 }
@@ -731,7 +802,7 @@ type Hub struct {
 }
 
 type WSClient struct {
-	conn io.ReadWriteCloser
+	conn *websocket.Conn
 	send chan []byte
 }
 
@@ -769,30 +840,4 @@ func (h *Hub) Run() {
 	}
 }
 
-// encodeWSFrame 编码 WebSocket 数据帧（简单实现，不支持分片和掩码）
-func encodeWSFrame(fin bool, opcode byte, payload []byte) []byte {
-	var frame []byte
-	// FIN + opcode
-	b := opcode
-	if fin {
-		b |= 0x80
-	}
-	frame = append(frame, b)
 
-	// 长度
-	l := len(payload)
-	if l < 126 {
-		frame = append(frame, byte(l))
-	} else if l < 65536 {
-		frame = append(frame, 126)
-		frame = append(frame, byte(l>>8), byte(l))
-	} else {
-		frame = append(frame, 127)
-		for i := 7; i >= 0; i-- {
-			frame = append(frame, byte(l>>(i*8)))
-		}
-	}
-
-	frame = append(frame, payload...)
-	return frame
-}
