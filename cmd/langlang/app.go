@@ -32,7 +32,7 @@ type App struct {
 }
 
 // NewApp 创建应用实例
-func NewApp(cfg *config.Config) *App {
+func NewApp(cfg *config.Config, configPath string) *App {
 	app := &App{
 		cfg:    cfg,
 		botReg: bot.GlobalRegistry,
@@ -44,6 +44,7 @@ func NewApp(cfg *config.Config) *App {
 
 	// 创建 Web UI 服务器
 	app.webui = webui.NewServer(cfg, app.plugins)
+	app.webui.SetConfigPath(configPath)
 	// db 和 botConnectors 会在后面的构造中赋值
 	// (在 Start() 前通过 SetDB/SetBotControl 注入)
 

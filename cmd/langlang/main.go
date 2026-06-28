@@ -33,7 +33,7 @@ func main() {
 	ensureDirs(cfg)
 
 	// 启动组件
-	app := NewApp(cfg)
+	app := NewApp(cfg, *cfgPath)
 	if err := app.Start(); err != nil {
 		log.Fatal("启动应用失败", "error", err)
 	}

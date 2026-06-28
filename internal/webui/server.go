@@ -34,6 +34,7 @@ var staticFiles embed.FS
 // Server Web UI 服务器
 type Server struct {
 	cfg          *config.Config
+	configPath   string
 	plugins      *plugin.Manager
 	db           *db.Manager
 	botRegistry  *bot.Registry
@@ -81,6 +82,7 @@ func (s *Server) Start() error {
 	mux.Handle("/api/testmode", apiAuth(s.handleTestMode))
 	mux.Handle("/ws", s.cors(http.HandlerFunc(s.handleWebSocket)))
 	mux.Handle("/api/debug/message", apiAuth(s.handleDebugMessage))
+	mux.Handle("/api/log/recent", apiAuth(s.handleLogRecent))
 
 	// 静态文件（从嵌入的 FS 中读取，无需外部目录）
 	mux.Handle("/", s.cors(http.HandlerFunc(s.serveStatic)))
@@ -133,6 +135,11 @@ func (s *Server) SetBotControl(registry *bot.Registry, adapters []bot.BotAdapter
 	s.botAdapters = adapters
 }
 
+// SetConfigPath 设置配置文件路径（用于保存时写回正确文件）
+func (s *Server) SetConfigPath(path string) {
+	s.configPath = path
+}
+
 func (s *Server) BroadcastLog(level, msg string) {
 	data, _ := json.Marshal(map[string]string{
 		"type":  "log",
@@ -140,7 +147,10 @@ func (s *Server) BroadcastLog(level, msg string) {
 		"msg":   msg,
 		"time":  time.Now().Format("15:04:05.000"),
 	})
-	s.hub.Broadcast <- data
+	select {
+	case s.hub.Broadcast <- data:
+	default:
+	}
 }
 
 var startTime time.Time
@@ -374,7 +384,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if err := s.cfg.Save("config.json"); err != nil {
+		if err := s.cfg.Save(s.configPath); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"code": -1, "msg": err.Error()})
 			return
 		}
@@ -689,6 +699,20 @@ func (s *Server) handleDebugMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code": 0,
 		"msg":  "调试消息已发送",
+	})
+}
+
+// ==================== API: 最近日志 ====================
+
+func (s *Server) handleLogRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": -1, "msg": "method not allowed"})
+		return
+	}
+	entries := log.RecentEntries(100)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"code": 0,
+		"logs": entries,
 	})
 }
 

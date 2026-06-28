@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
 var levelMap = map[string]slog.Level{
@@ -50,11 +53,14 @@ func Init(level string, filePath string) error {
 // BroadcastFunc 是日志广播回调
 type BroadcastFunc func(level, msg string)
 
-var broadcaster BroadcastFunc
+// 使用 atomic 确保跨协程可见性（Start() 协程写入，HTTP 协程读取）
+var broadcaster atomic.Pointer[BroadcastFunc]
 
 // SetBroadcaster 注册日志广播器（由 webui 在启动时调用）
 func SetBroadcaster(fn BroadcastFunc) {
-	broadcaster = fn
+	fnPtr := new(BroadcastFunc)
+	*fnPtr = fn
+	broadcaster.Store(fnPtr)
 }
 
 // formatBroadcast 将结构化参数格式化为可读字符串
@@ -85,36 +91,119 @@ func formatBroadcast(msg string, args []any) string {
 
 func Debug(msg string, args ...any) {
 	slog.Debug(msg, args...)
-	if broadcaster != nil {
-		broadcaster("debug", formatBroadcast(msg, args))
+	formatted := formatBroadcast(msg, args)
+	pushRing("debug", formatted)
+	if fn := broadcaster.Load(); fn != nil {
+		(*fn)("debug", formatted)
 	}
 }
 
 func Info(msg string, args ...any) {
 	slog.Info(msg, args...)
-	if broadcaster != nil {
-		broadcaster("info", formatBroadcast(msg, args))
+	formatted := formatBroadcast(msg, args)
+	pushRing("info", formatted)
+	if fn := broadcaster.Load(); fn != nil {
+		(*fn)("info", formatted)
 	}
 }
 
 func Warn(msg string, args ...any) {
 	slog.Warn(msg, args...)
-	if broadcaster != nil {
-		broadcaster("warn", formatBroadcast(msg, args))
+	formatted := formatBroadcast(msg, args)
+	pushRing("warn", formatted)
+	if fn := broadcaster.Load(); fn != nil {
+		(*fn)("warn", formatted)
 	}
 }
 
 func Error(msg string, args ...any) {
 	slog.Error(msg, args...)
-	if broadcaster != nil {
-		broadcaster("error", formatBroadcast(msg, args))
+	formatted := formatBroadcast(msg, args)
+	pushRing("error", formatted)
+	if fn := broadcaster.Load(); fn != nil {
+		(*fn)("error", formatted)
 	}
 }
 
 func Fatal(msg string, args ...any) {
 	slog.Error(msg, args...)
-	if broadcaster != nil {
-		broadcaster("error", formatBroadcast(msg, args))
+	formatted := formatBroadcast(msg, args)
+	pushRing("error", formatted)
+	if fn := broadcaster.Load(); fn != nil {
+		(*fn)("error", formatted)
 	}
 	os.Exit(1)
 }
+
+// ===== 日志环形缓冲区（用于 HTTP 轮询回退） =====
+
+// Entry 是单条日志记录
+type Entry struct {
+	Level string `json:"level"`
+	Msg   string `json:"msg"`
+	Time  string `json:"time"`
+}
+
+const ringBufSize = 200
+
+var (
+	ringMu     sync.Mutex
+	ringBuf    [ringBufSize]Entry
+	ringNext   int
+	ringWrapped bool
+)
+
+// pushRing 向环形缓冲区添加一条日志
+func pushRing(level, msg string) {
+	ringMu.Lock()
+	defer ringMu.Unlock()
+	ringBuf[ringNext] = Entry{
+		Level: level,
+		Msg:   msg,
+		Time:  time.Now().Format("15:04:05.000"),
+	}
+	ringNext++
+	if ringNext >= ringBufSize {
+		ringNext = 0
+		ringWrapped = true
+	}
+}
+
+// RecentEntries 返回最近的 N 条日志（最多 ringBufSize 条）
+func RecentEntries(n int) []Entry {
+	ringMu.Lock()
+	defer ringMu.Unlock()
+
+	if n <= 0 || n > ringBufSize {
+		n = ringBufSize
+	}
+
+	var result []Entry
+	if ringWrapped {
+		// 缓冲区已绕回，从 ringNext 到末尾 + 从开头到 ringNext-1
+		result = make([]Entry, 0, n)
+		// 从 ringNext 开始（最旧的已覆盖位置）
+		for i := 0; i < ringBufSize && len(result) < n; i++ {
+			idx := (ringNext + i) % ringBufSize
+			if ringBuf[idx].Msg != "" {
+				result = append(result, ringBuf[idx])
+			}
+		}
+	} else {
+		// 还没绕回，直接取前 ringNext 条
+		count := ringNext
+		if count > n {
+			count = n
+		}
+		start := ringNext - count
+		if start < 0 {
+			start = 0
+		}
+		result = make([]Entry, count)
+		copy(result, ringBuf[start:ringNext])
+	}
+	return result
+}
+
+// 在每条日志中推入环形缓冲区
+// 注：各日志函数在各自函数体内调用 pushRing
