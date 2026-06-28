@@ -391,34 +391,53 @@
     currentEditorPlugin = pluginName;
     editorCode = code;
 
+    // 从插件数据获取语言，默认 redlang
+    let pluginLang = 'redlang';
+    if (pluginName) {
+      try {
+        const res2 = await API.getPlugin(pluginName);
+        if (res2.data?.lang) {
+          pluginLang = res2.data.lang;
+        }
+      } catch (_) {}
+    }
+
     content.innerHTML = `
       <div class="editor-container">
         <div class="editor-toolbar">
           <select class="form-control" id="editorPluginSelect" onchange="switchEditorPlugin()">
             <option value="">— 选择或输入插件名 —</option>
-            ${plugins.map(p => `<option value="${p.name}" ${p.name === pluginName ? 'selected' : ''}>${p.name}</option>`).join('')}
+            ${plugins.map(p => `<option value="${p.name}" ${p.name === pluginName ? 'selected' : ''}>${escapeHtml(p.name)}${p.lang && p.lang !== 'redlang' ? ' (' + p.lang + ')' : ''}</option>`).join('')}
           </select>
-          <input class="form-control" id="editorPluginName" placeholder="插件名称" style="width:180px;font-family:monospace" value="${pluginName}">
+          <input class="form-control" id="editorPluginName" placeholder="插件名称" style="width:180px;font-family:monospace" value="${escapeHtml(pluginName)}">
+          <select class="form-control" id="editorLangSelect" style="width:100px;font-size:12px">
+            <option value="redlang" ${pluginLang === 'redlang' ? 'selected' : ''}>RedLang</option>
+            <option value="lua" ${pluginLang === 'lua' ? 'selected' : ''}>Lua</option>
+          </select>
           <div class="btn-group">
             <button class="btn btn-primary" onclick="saveEditorCode()">💾 保存</button>
             <button class="btn btn-secondary" onclick="formatEditorCode()">✨ 格式化</button>
             <button class="btn btn-secondary" onclick="validateEditorCode()">✅ 验证</button>
           </div>
         </div>
-        <div class="editor-area">
-          <textarea id="editorTextarea" spellcheck="false" oninput="onEditorChange()">${escapeHtml(code)}</textarea>
-        </div>
+        <div class="editor-area" id="cm-editor-container"></div>
         <div id="editorStatus" style="padding:8px 0;font-size:12px;color:var(--text-muted);flex-shrink:0"></div>
       </div>`;
 
-    document.getElementById('editorTextarea').focus();
+    // 初始化 CodeMirror 6 编辑器
+    const cm = window.__CM;
+    if (cm) {
+      const container = document.getElementById('cm-editor-container');
+      cm.createEditor(container, code, pluginLang);
+      cm.focusEditor();
+    }
   }
 
   window.switchEditorPlugin = function() {
     const name = document.getElementById('editorPluginSelect').value;
-    const currentCode = document.getElementById('editorTextarea')?.value;
+    const currentCode = window.__CM ? window.__CM.getEditorCode() : '';
     // 有未保存修改时先提示
-    if (editDirty && currentCode !== undefined && currentCode !== editorCode) {
+    if (editDirty && currentCode !== '' && currentCode !== editorCode) {
       if (!confirm('当前脚本有未保存的修改，确定切换吗？')) return;
     }
     editDirty = false;
@@ -429,20 +448,16 @@
   };
 
   window.onEditorChange = function() {
-    editDirty = true;
-    editorCode = document.getElementById('editorTextarea').value;
-    const status = document.getElementById('editorStatus');
-    const lines = editorCode.split('\n').length;
-    const bytes = new Blob([editorCode]).size;
-    status.textContent = `📄 ${lines} 行 | ${bytes} 字节`;
+    // CM6 通过 updateListener 跟踪变更，此函数保留为空桩供旧 onclick 引用
   };
 
   window.saveEditorCode = async function() {
     const name = document.getElementById('editorPluginName').value.trim();
     if (!name) { showToast('请输入插件名称', 'error'); return; }
-    const code = document.getElementById('editorTextarea').value;
+    const code = window.__CM ? window.__CM.getEditorCode() : '';
+    const lang = document.getElementById('editorLangSelect')?.value || 'redlang';
     try {
-      await API.savePlugin(name, code);
+      await API.savePlugin(name, code, lang);
       editDirty = false;
       showToast(`插件 "${name}" 已保存`, 'success');
       location.hash = `#/editor?name=${encodeURIComponent(name)}`;
@@ -452,9 +467,10 @@
   };
 
   window.validateEditorCode = async function() {
-    const code = document.getElementById('editorTextarea').value;
+    const code = window.__CM ? window.__CM.getEditorCode() : '';
+    const lang = document.getElementById('editorLangSelect')?.value || 'redlang';
     try {
-      await API.validate(code);
+      await API.validate(code, lang);
       showToast('语法验证通过 ✅', 'success');
     } catch (err) {
       showToast(`语法错误: ${err.message}`, 'error');
@@ -462,12 +478,12 @@
   };
 
   window.formatEditorCode = function() {
-    // 简单格式化：统一缩进
-    const ta = document.getElementById('editorTextarea');
-    let code = ta.value;
+    const cm = window.__CM;
+    if (!cm) return;
+    let code = cm.getEditorCode();
     // 去除多余空行
     code = code.replace(/\n{3,}/g, '\n\n');
-    ta.value = code;
+    cm.setEditorCode(code);
     showToast('已格式化', 'info');
   };
 

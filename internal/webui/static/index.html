@@ -61,7 +61,31 @@
     </main>
   </div>
 
+  <script type="importmap">
+  {
+    "imports": {
+      "codemirror": "https://esm.sh/codemirror@6.0.1",
+      "@codemirror/state": "https://esm.sh/@codemirror/state@6.4.1",
+      "@codemirror/view": "https://esm.sh/@codemirror/view@6.29.1",
+      "@codemirror/language": "https://esm.sh/@codemirror/language@6.10.3",
+      "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.6.0",
+      "@codemirror/lang-lua": "https://esm.sh/@codemirror/lang-lua@6.1.0",
+      "@codemirror/theme-one-dark": "https://esm.sh/@codemirror/theme-one-dark@6.1.2",
+      "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6.18.1",
+      "@codemirror/search": "https://esm.sh/@codemirror/search@6.5.6",
+      "@codemirror/lint": "https://esm.sh/@codemirror/lint@6.8.1",
+      "@lezer/common": "https://esm.sh/@lezer/common@1.2.1",
+      "@lezer/lr": "https://esm.sh/@lezer/lr@1.4.0",
+      "@lezer/highlight": "https://esm.sh/@lezer/highlight@1.2.0",
+      "@lezer/lua": "https://esm.sh/@lezer/lua@1.0.0",
+      "crelt": "https://esm.sh/crelt@1.0.6",
+      "style-mod": "https://esm.sh/style-mod@4.1.2",
+      "w3c-keyname": "https://esm.sh/w3c-keyname@2.2.8"
+    }
+  }
+  </script>
   <script src="js/api.js"></script>
-  <script src="js/app.js"></script>
+  <script type="module" src="js/editor.js"></script>
+  <script defer src="js/app.js"></script>
 </body>
 </html>

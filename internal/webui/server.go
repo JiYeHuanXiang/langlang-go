@@ -22,6 +22,7 @@ import (
 	"github.com/super1207/langlang-go/internal/config"
 	"github.com/super1207/langlang-go/internal/db"
 	"github.com/super1207/langlang-go/internal/log"
+	"github.com/super1207/langlang-go/internal/lua"
 	"github.com/super1207/langlang-go/internal/plugin"
 	"github.com/super1207/langlang-go/internal/redlang"
 )
@@ -277,12 +278,13 @@ func (s *Server) handlePlugin(w http.ResponseWriter, r *http.Request) {
 		}
 		var req struct {
 			Code string `json:"code"`
+			Lang string `json:"lang"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "invalid json"})
 			return
 		}
-		if err := s.plugins.Save(name, req.Code); err != nil {
+		if err := s.plugins.Save(name, req.Code, req.Lang); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"code": -1, "msg": err.Error()})
 			return
 		}
@@ -399,13 +401,22 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Code string `json:"code"`
+		Lang string `json:"lang"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "invalid json"})
 		return
 	}
-	if err := redlang.ValidateCode(req.Code); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"code": -1, "msg": err.Error()})
+	var validateErr error
+	switch req.Lang {
+	case "lua":
+		validateErr = lua.ValidateLua(req.Code)
+	default:
+		// 默认使用 RedLang 校验（兼容旧版本未传 lang 字段）
+		validateErr = redlang.ValidateCode(req.Code)
+	}
+	if validateErr != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"code": -1, "msg": validateErr.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "ok"})

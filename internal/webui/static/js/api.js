@@ -43,8 +43,8 @@ const API = (() => {
     },
 
     // 保存插件
-    async savePlugin(name, code) {
-      return request('POST', `/api/plugin/${encodeURIComponent(name)}`, { code });
+    async savePlugin(name, code, lang = 'redlang') {
+      return request('POST', `/api/plugin/${encodeURIComponent(name)}`, { code, lang });
     },
 
     // 删除插件
@@ -53,8 +53,8 @@ const API = (() => {
     },
 
     // 创建新插件
-    async createPlugin(name, code) {
-      return request('POST', `/api/plugin/${encodeURIComponent(name)}`, { code });
+    async createPlugin(name, code, lang = 'redlang') {
+      return request('POST', `/api/plugin/${encodeURIComponent(name)}`, { code, lang });
     },
 
     // 获取配置
@@ -73,8 +73,8 @@ const API = (() => {
     },
 
     // 验证脚本语法
-    async validate(code) {
-      return request('POST', '/api/validate', { code });
+    async validate(code, lang = 'redlang') {
+      return request('POST', '/api/validate', { code, lang });
     },
 
     // 查询消息

@@ -17,6 +17,7 @@ import (
 type Package struct {
 	Name      string    `json:"name"`
 	Code      string    `json:"code"`
+	Lang      string    `json:"lang"`
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -85,7 +86,7 @@ func (m *Manager) LoadAll() error {
 }
 
 // Save 保存插件到磁盘
-func (m *Manager) Save(name, code string) error {
+func (m *Manager) Save(name, code, lang string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -100,6 +101,7 @@ func (m *Manager) Save(name, code string) error {
 		m.plugins[name] = pkg
 	}
 	pkg.Code = code
+	pkg.Lang = lang
 	pkg.UpdatedAt = now
 
 	return m.writeToDisk(name)
