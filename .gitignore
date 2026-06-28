@@ -1,0 +1,29 @@
+# LangLang-Go
+
+/bin/
+/tmp/
+
+# 运行时数据
+data/
+plugins/
+logs/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 配置（用户自定义）
+config.json
+
+# 编译输出
+*.exe
+*.dll
+*.so
+*.dylib

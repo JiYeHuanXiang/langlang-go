@@ -1,0 +1,46 @@
+{
+  "core": {
+    "web_port": 2397,
+    "platforms": [],
+    "skip_msg_minutes": 10
+  },
+  "log": {
+    "level": "info",
+    "file": ""
+  },
+  "paths": {
+    "data": "data",
+    "plugins": "plugins",
+    "logs": "logs",
+    "tmp": "tmp"
+  },
+  "web": {
+    "listen": ":2397",
+    "static_dir": "web",
+    "access_token": ""
+  },
+  "bot": {
+    "onebot11": [
+      {
+        "url": "ws://127.0.0.1:6700",
+        "access_token": "",
+        "self_id": ""
+      }
+    ],
+    "telegram": []
+  },
+  "mqtt": {
+    "enabled": false,
+    "broker": "tcp://127.0.0.1:1883",
+    "client_id": "langlang-go-1",
+    "username": "",
+    "password": ""
+  },
+  "postgres": {
+    "enabled": false,
+    "conn_str": "host=127.0.0.1 port=5432 dbname=langlang user=langlang password=langlang"
+  },
+  "audio": {
+    "enabled_formats": ["mp3", "wav"]
+  }
+}
