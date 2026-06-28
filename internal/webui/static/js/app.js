@@ -132,6 +132,7 @@
       const st = statusRes;
       const pluginCount = pluginsRes.plugins ? pluginsRes.plugins.length : 0;
       const enabledCount = pluginsRes.plugins ? pluginsRes.plugins.filter(p => p.enabled).length : 0;
+      const testModeOn = st.test_mode === 'on';
 
       content.innerHTML = `
         <div class="stats-grid">
@@ -150,6 +151,58 @@
           <div class="stat-card">
             <div class="stat-value">${st.uptime || '刚刚启动'}</div>
             <div class="stat-label">⏱️ 运行时间</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <span style="font-weight:600">🧪 测试模式</span>
+              ${testModeOn ? '<span style="background:#e74c3c;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;margin-left:8px">开启</span>' : '<span style="background:#666;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;margin-left:8px">关闭</span>'}
+            </div>
+            <label class="testmode-toggle" style="cursor:pointer;position:relative;display:inline-block;width:44px;height:24px">
+              <input type="checkbox" id="testModeToggle" ${testModeOn ? 'checked' : ''} onchange="toggleTestMode()" style="opacity:0;width:0;height:0" >
+              <span style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:${testModeOn ? '#e74c3c' : '#666'};border-radius:24px;transition:.3s">
+                <span style="position:absolute;height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s;${testModeOn ? 'transform:translateX(20px)' : ''}"></span>
+              </span>
+            </label>
+          </div>
+          <div class="card-body">
+            <p style="color:var(--text-secondary);font-size:14px">
+              开启后，收到消息不会向外发送，只在日志界面输出结果。
+            </p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+            <h3>🔗 机器人连接</h3>
+            <button class="btn btn-secondary btn-sm" onclick="location.hash='#/settings'">设置</button>
+          </div>
+          <div class="card-body">
+            ${st.bots && st.bots.length > 0
+              ? `<div class="table-wrap"><table>
+                  <thead><tr><th>平台</th><th>ID</th><th>状态</th><th>操作</th></tr></thead>
+                  <tbody>
+                    ${st.bots.map(b => `
+                      <tr>
+                        <td><strong>${b.platform}</strong></td>
+                        <td style="font-family:monospace;font-size:13px">${b.self_id || '-'}</td>
+                        <td>${b.running
+                          ? '<span class="badge badge-success">● 运行中</span>'
+                          : '<span class="badge badge-danger">● 已停止</span>'
+                        }</td>
+                        <td>
+                          ${b.running
+                            ? `<button class="btn btn-danger btn-sm" onclick="toggleBot('stop','${b.platform}','${b.self_id}')">停止</button>`
+                            : `<button class="btn btn-primary btn-sm" onclick="toggleBot('start','${b.platform}','${b.self_id}')">启动</button>`
+                          }
+                        </td>
+                      </tr>`).join('')}
+                  </tbody>
+                </table></div>`
+              : '<div class="empty-state"><p>暂无已配置的机器人连接</p></div>'
+            }
           </div>
         </div>
 
@@ -548,14 +601,25 @@
       </div>`;
 
     try {
-      const res = await API.getConfig();
+      const [res, tmRes] = await Promise.all([
+        API.getConfig(),
+        API.getTestMode(),
+      ]);
       const cfg = res.config || {};
+      const testOn = tmRes.test_mode === 'on';
 
       document.querySelector('.card-body').innerHTML = `
         <div class="settings-section">
           <div class="form-group">
             <label>Web 监听地址</label>
             <input class="form-control" id="cfgListen" value="${cfg.web?.listen || ':2397'}">
+          </div>
+          <div class="form-group">
+            <label>测试模式开关</label>
+            <button class="btn ${testOn ? 'btn-danger' : 'btn-secondary'} btn-sm" id="testModeBtn" onclick="toggleTestModeSettings()">
+              ${testOn ? '🧪 关闭测试模式' : '🧪 开启测试模式'}
+            </button>
+            <span style="font-size:12px;color:var(--text-muted);margin-left:8px">开启后不向外发送消息</span>
           </div>
           <div class="form-group">
             <label>访问令牌（留空=无鉴权）</label>
@@ -587,6 +651,47 @@
       document.querySelector('.card-body').innerHTML = `<p style="color:var(--red-primary)">加载配置失败: ${err.message}</p>`;
     }
   }
+
+  // ==================== 测试模式 ====================
+  // ==================== Bot 控制 ====================
+  window.toggleBot = async function(action, platform, selfID) {
+    try {
+      await API.botControl(action, platform, selfID);
+      showToast(action === 'stop' ? '⏹️ 已停止' : '▶️ 启动中');
+      setTimeout(() => navigate('dashboard'), 1000);
+    } catch (err) {
+      showToast(`操作失败: ${err.message}`, 'error');
+    }
+  };
+
+  window.toggleTestMode = async function() {
+    const toggle = document.getElementById('testModeToggle');
+    // onchange fires after the checkbox has already toggled, so checked is the new state
+    const enabled = toggle ? toggle.checked : true;
+    try {
+      await API.setTestMode(enabled);
+      showToast(enabled ? '🧪 测试模式已开启 — 不会向外发送消息' : '✅ 测试模式已关闭 — 恢复正常发送');
+      if (state.currentPage === 'dashboard') {
+        navigate('dashboard');
+      }
+    } catch (err) {
+      showToast(`切换失败: ${err.message}`, 'error');
+    }
+  };
+
+  window.toggleTestModeSettings = async function() {
+    const btn = document.getElementById('testModeBtn');
+    const currentText = btn ? btn.textContent.trim() : '';
+    const nowOn = currentText.includes('关闭');
+    const enabled = !nowOn;
+    try {
+      await API.setTestMode(enabled);
+      showToast(enabled ? '🧪 测试模式已开启' : '✅ 测试模式已关闭');
+      navigate('settings');
+    } catch (err) {
+      showToast(`切换失败: ${err.message}`, 'error');
+    }
+  };
 
   window.saveSettings = async function() {
     const btn = document.querySelector('.btn-primary');

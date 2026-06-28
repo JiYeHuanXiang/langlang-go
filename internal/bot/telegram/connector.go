@@ -66,6 +66,13 @@ func (c *Connector) Platform() string { return "telegram" }
 // SelfID 返回机器人 ID
 func (c *Connector) SelfID() string { return c.selfID }
 
+// Running 返回连接是否正在运行
+func (c *Connector) Running() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.running
+}
+
 // Start 启动长轮询
 func (c *Connector) Start() error {
 	c.mu.Lock()
@@ -101,6 +108,17 @@ func (c *Connector) Stop() {
 
 // CallAPI 调用 Telegram Bot API
 func (c *Connector) CallAPI(action string, params map[string]any) (map[string]any, error) {
+	// 测试模式：仅记录日志，不真实发送
+	if bot.TestMode {
+		log.Info("[测试模式] 拦截 API 调用",
+			"platform", c.Platform(),
+			"self_id", c.SelfID(),
+			"action", action,
+			"params", fmt.Sprintf("%+v", params),
+		)
+		return map[string]any{"ok": true, "result": map[string]any{}}, nil
+	}
+
 	body, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("序列化参数失败: %w", err)

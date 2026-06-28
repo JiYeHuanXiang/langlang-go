@@ -125,13 +125,99 @@ func ValidateCode(code string) error {
 	return err
 }
 
-// SanitizeCode 清理脚本代码（移除危险模式等）
+// SanitizeCode 清理脚本代码（白名单模式：只允许已注册的内置函数）
 func SanitizeCode(code string) string {
-	// 简单的安全检查：限制某些命令
-	// TODO: 实现更完善的沙箱
-	disallowed := []string{"执行", "运行", "调用"}
-	for _, d := range disallowed {
-		code = strings.ReplaceAll(code, "【"+d+"】", "【已禁用_"+d+"】")
+	whitelist := builtinCommands()
+	// 找到所有 【命令名】 模式
+	var result strings.Builder
+	i := 0
+	runes := []rune(code)
+	for i < len(runes) {
+		if runes[i] == '【' {
+			// 找到匹配的 】 或 @
+			j := i + 1
+			var name strings.Builder
+			for j < len(runes) && runes[j] != '】' && runes[j] != '@' {
+				name.WriteRune(runes[j])
+				j++
+			}
+			cmdName := name.String()
+			if !whitelist[cmdName] {
+				// 不在白名单，替换为已禁用版本
+				result.WriteString("【已禁用_" + cmdName + "】")
+				// 跳到命令结束（跳过参数）
+				depth := 1
+				for j < len(runes) && depth > 0 {
+					if runes[j] == '【' {
+						depth++
+					} else if runes[j] == '】' {
+						depth--
+					}
+					j++
+					if depth == 0 {
+						break
+					}
+				}
+			} else {
+				// 在白名单，原样保留
+				result.WriteString(string(runes[i:j]))
+				// 保留整个命令（包括参数）
+				depth := 1
+				for j < len(runes) && depth > 0 {
+					if runes[j] == '【' {
+						depth++
+					} else if runes[j] == '】' {
+						depth--
+					}
+					j++
+				}
+			}
+			i = j
+		} else {
+			result.WriteRune(runes[i])
+			i++
+		}
 	}
-	return code
+	return result.String()
+}
+
+// builtinCommands 返回所有内置命令名的白名单
+func builtinCommands() map[string]bool {
+	return map[string]bool{
+		"输出":     true,
+		"如果":     true,
+		"则":      true,
+		"否则":    true,
+		"且":      true,
+		"或":      true,
+		"==":     true,
+		"!=":     true,
+		">":      true,
+		"<":      true,
+		">=":     true,
+		"<=":     true,
+		"加":      true,
+		"减":      true,
+		"乘":      true,
+		"除":      true,
+		"模":      true,
+		"取文本长度":  true,
+		"取数组长度":  true,
+		"取数组成员":  true,
+		"寻找文本":   true,
+		"到文本":    true,
+		"合并文本":   true,
+		"子文本替换":  true,
+		"令":      true,
+		"赋值":     true,
+		"取":      true,
+		"读取":     true,
+		"计次循环":   true,
+		"计次循环尾":  true,
+		"循环":     true,
+		"循环尾":    true,
+		"跳出":     true,
+		"继续":     true,
+		"写日志":    true,
+	}
 }

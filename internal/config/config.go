@@ -96,7 +96,7 @@ func DefaultConfig() *Config {
 		},
 		Web: WebConfig{
 			Listen:    ":2397",
-			StaticDir: filepath.Join(baseDir, "web"),
+			StaticDir: "", // 静态文件已嵌入二进制，不再需要本地目录
 		},
 		MQTT: MQTTConfig{Enabled: false},
 		Postgres: PostgresConfig{Enabled: false},

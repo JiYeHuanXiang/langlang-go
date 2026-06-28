@@ -26,6 +26,9 @@ type BotAdapter interface {
 
 	// SelfID 返回机器人自身 ID
 	SelfID() string
+
+	// Running 返回连接是否正在运行
+	Running() bool
 }
 
 // Registry 是适配器注册表

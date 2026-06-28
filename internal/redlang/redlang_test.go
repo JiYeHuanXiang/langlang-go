@@ -165,3 +165,228 @@ func TestSanitize(t *testing.T) {
 		t.Fatal("sanitize didn't remove dangerous command")
 	}
 }
+
+// --- 新增内置函数测试 ---
+
+func TestEvalAdd(t *testing.T) {
+	result, err := EvalScript("【加】@3@5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "8" {
+		t.Fatalf("expected 8, got '%s'", result)
+	}
+}
+
+func TestEvalSub(t *testing.T) {
+	result, err := EvalScript("【减】@10@3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "7" {
+		t.Fatalf("expected 7, got '%s'", result)
+	}
+}
+
+func TestEvalMul(t *testing.T) {
+	result, err := EvalScript("【乘】@4@5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "20" {
+		t.Fatalf("expected 20, got '%s'", result)
+	}
+}
+
+func TestEvalDiv(t *testing.T) {
+	result, err := EvalScript("【除】@10@3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// %g 格式可能产生 "3.33333"，粗略校验包含 3
+	if !strings.HasPrefix(result, "3") {
+		t.Fatalf("expected ~3.33, got '%s'", result)
+	}
+}
+
+func TestEvalDivByZero(t *testing.T) {
+	result, err := EvalScript("【除】@5@0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "0" {
+		t.Fatalf("expected 0, got '%s'", result)
+	}
+}
+
+func TestEvalMod(t *testing.T) {
+	result, err := EvalScript("【模】@10@3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "1" {
+		t.Fatalf("expected 1, got '%s'", result)
+	}
+}
+
+func TestEvalLessThan(t *testing.T) {
+	result, err := EvalScript("【<】@2@5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "真" {
+		t.Fatalf("expected '真', got '%s'", result)
+	}
+}
+
+func TestEvalGreaterEqual(t *testing.T) {
+	result, err := EvalScript("【>=】@5@3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "真" {
+		t.Fatalf("expected '真', got '%s'", result)
+	}
+}
+
+func TestEvalLessEqual(t *testing.T) {
+	result, err := EvalScript("【<=】@3@5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "真" {
+		t.Fatalf("expected '真', got '%s'", result)
+	}
+}
+
+// --- 变量测试 ---
+
+func TestVarSetAndGet(t *testing.T) {
+	code := "【令】@name@小明 【取】@name"
+	result, err := EvalScript(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "小明" {
+		t.Fatalf("expected '小明', got '%s'", result)
+	}
+}
+
+func TestVarGetUndefined(t *testing.T) {
+	result, err := EvalScript("【取】@不存在的变量")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "" {
+		t.Fatalf("expected '', got '%s'", result)
+	}
+}
+
+func TestVarOverride(t *testing.T) {
+	code := "【令】@x@1 【令】@x@2 【取】@x"
+	result, err := EvalScript(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "2" {
+		t.Fatalf("expected '2', got '%s'", result)
+	}
+}
+
+func TestUserFuncParams(t *testing.T) {
+	// 手动创建运行时，注册一个用户函数：参数1 + 参数2
+	rt := NewRuntime()
+	// 定义一个函数体： 【加】@【取@参数1】@【取@参数2】
+	funAst, err := Parse("【加】@【取@参数1】@【取@参数2】")
+	if err != nil {
+		t.Fatal(err)
+	}
+	funVal := NewFun(&funAst)
+	rt.Scope.Set("加法", funVal)
+
+	// 调用: 【加法】@10@20
+	code := "【加法】@10@20"
+	ast, err := Parse(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := rt.Eval(ast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.String() != "30" {
+		t.Fatalf("expected '30', got '%s'", result.String())
+	}
+}
+
+// --- 循环测试 ---
+
+func TestEvalCountLoop(t *testing.T) {
+	// 循环体中纯文本需用 【输出】 包裹，避免被误读为命令参数
+	code := "【计次循环】@3 【输出】@hello 【计次循环尾】"
+	result, err := EvalScript(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "hellohellohello" {
+		t.Fatalf("expected 'hellohellohello', got '%s'", result)
+	}
+}
+
+func TestEvalCountLoopWithVar(t *testing.T) {
+	rt := NewRuntime()
+	code := "【计次循环】@3 【输出】@【取@循环次数】 【计次循环尾】"
+	ast, err := Parse(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := rt.Eval(ast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.String() != "123" {
+		t.Fatalf("expected '123', got '%s'", result.String())
+	}
+}
+
+func TestEvalLoopBreak(t *testing.T) {
+	// 只在第一次迭代输出 "a" 然后跳出
+	code := "【计次循环】@5 【输出】@a 【跳出】 【输出】@b 【计次循环尾】"
+	result, err := EvalScript(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "a" {
+		t.Fatalf("expected 'a', got '%s'", result)
+	}
+}
+
+func TestEvalWhileLoop(t *testing.T) {
+	// 循环 3 次：i < 3 时继续
+	rt := NewRuntime()
+	rt.Scope.Set("i", NewText("0"))
+	code := "【循环】@【<】@【取@i】@3 【输出】@【取@i】 【令】@i@【加】@【取@i】@1 【循环尾】"
+	ast, err := Parse(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := rt.Eval(ast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.String() != "012" {
+		t.Fatalf("expected '012', got '%s'", result.String())
+	}
+}
+
+func TestVarInExpression(t *testing.T) {
+	// 注意：嵌套命令作参数时，用内联格式 【命令@arg】 避免歧义
+	code := "【令】@a@10 【令】@b@20 【加】@【取@a】@【取@b】"
+	result, err := EvalScript(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "30" {
+		t.Fatalf("expected '30', got '%s'", result)
+	}
+}

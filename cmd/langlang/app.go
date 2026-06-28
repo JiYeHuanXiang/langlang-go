@@ -44,6 +44,8 @@ func NewApp(cfg *config.Config) *App {
 
 	// 创建 Web UI 服务器
 	app.webui = webui.NewServer(cfg, app.plugins)
+	// db 和 botConnectors 会在后面的构造中赋值
+	// (在 Start() 前通过 SetDB/SetBotControl 注入)
 
 	// 创建数据库管理器
 	app.db = db.NewManager(cfg.Postgres)
@@ -86,6 +88,10 @@ func (a *App) Start() error {
 	}
 
 	log.Info("正在启动各组件...")
+
+	// 0. 注入 DB / Bot 引用到 Web UI
+	a.webui.SetDB(a.db)
+	a.webui.SetBotControl(a.botReg, a.botConnectors)
 
 	// 1. 启动数据库
 	if err := a.db.Open(); err != nil {

@@ -54,6 +54,13 @@ func (c *Connector) Platform() string { return "onebot11" }
 // SelfID 返回机器人 ID
 func (c *Connector) SelfID() string { return c.selfID }
 
+// Running 返回连接是否正在运行
+func (c *Connector) Running() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.running
+}
+
 // Start 启动反向 WebSocket 连接
 func (c *Connector) Start() error {
 	c.mu.Lock()
@@ -94,6 +101,17 @@ func (c *Connector) Stop() {
 
 // CallAPI 调用 OneBot 11 API（通过 WebSocket 发送请求并等待响应）
 func (c *Connector) CallAPI(action string, params map[string]any) (map[string]any, error) {
+	// 测试模式：仅记录日志，不真实发送
+	if bot.TestMode {
+		log.Info("[测试模式] 拦截 API 调用",
+			"platform", c.Platform(),
+			"self_id", c.SelfID(),
+			"action", action,
+			"params", fmt.Sprintf("%+v", params),
+		)
+		return map[string]any{"status": "ok", "data": map[string]any{}}, nil
+	}
+
 	c.mu.Lock()
 	conn := c.conn
 	c.mu.Unlock()

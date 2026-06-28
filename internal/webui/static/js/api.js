@@ -77,6 +77,25 @@ const API = (() => {
       return request('POST', '/api/validate', { code });
     },
 
+    // 查询消息
+    async getMessages(params = {}) {
+      const q = new URLSearchParams(params).toString();
+      return request('GET', `/api/messages?${q}`);
+    },
+
+    // 控制 Bot 连接
+    async botControl(action, platform, selfID = '') {
+      return request('POST', '/api/bot/', { action, platform, self_id: selfID });
+    },
+
+    // 获取/设置测试模式
+    async getTestMode() {
+      return request('GET', '/api/testmode');
+    },
+    async setTestMode(enabled) {
+      return request('POST', '/api/testmode', { enabled });
+    },
+
     // WebSocket URL
     wsUrl() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';

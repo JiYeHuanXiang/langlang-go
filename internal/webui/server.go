@@ -3,34 +3,45 @@
 package webui
 
 import (
+	"context"
 	"crypto/sha1"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
+	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/super1207/langlang-go/internal/bot"
 	"github.com/super1207/langlang-go/internal/config"
+	"github.com/super1207/langlang-go/internal/db"
 	"github.com/super1207/langlang-go/internal/log"
 	"github.com/super1207/langlang-go/internal/plugin"
 	"github.com/super1207/langlang-go/internal/redlang"
 )
 
+//go:embed all:static
+var staticFiles embed.FS
+
 const wsGUID = "258EAFA5-E914-47DA-95CA-5AB5E6D3C4FD"
 
 // Server Web UI 服务器
 type Server struct {
-	cfg     *config.Config
-	plugins *plugin.Manager
-	server  *http.Server
-	hub     *Hub
-	mu      sync.Mutex
-	running bool
+	cfg          *config.Config
+	plugins      *plugin.Manager
+	db           *db.Manager
+	botRegistry  *bot.Registry
+	botAdapters  []bot.BotAdapter
+	server       *http.Server
+	hub          *Hub
+	mu           sync.Mutex
+	running      bool
 }
 
 // NewServer 创建 Web UI 服务器
@@ -62,15 +73,21 @@ func (s *Server) Start() error {
 	mux.Handle("/api/config", apiAuth(s.handleConfig))
 	mux.Handle("/api/reload", apiAuth(s.handleReload))
 	mux.Handle("/api/validate", apiAuth(s.handleValidate))
+	mux.Handle("/api/messages", apiAuth(s.handleMessages))
+	mux.Handle("/api/bot/", s.cors(http.HandlerFunc(s.handleBot)))
+	mux.Handle("/api/testmode", apiAuth(s.handleTestMode))
 	mux.Handle("/ws", s.cors(http.HandlerFunc(s.handleWebSocket)))
 
-	// 静态文件
-	fileServer := http.FileServer(neuteredFileSystem{http.Dir(s.cfg.Web.StaticDir)})
-	mux.Handle("/", s.cors(fileServer))
+	// 静态文件（从嵌入的 FS 中读取，无需外部目录）
+	mux.Handle("/", s.cors(http.HandlerFunc(s.serveStatic)))
 
 	s.server = &http.Server{
-		Addr:    s.cfg.Web.Listen,
-		Handler: mux,
+		Addr:              s.cfg.Web.Listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go s.hub.Run()
@@ -92,12 +109,26 @@ func (s *Server) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.server != nil {
-		s.server.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.server.Shutdown(ctx)
+		s.server = nil
 	}
 	s.running = false
 }
 
 // BroadcastLog 广播日志到所有 WebSocket 客户端
+// SetDB 设置数据库管理器引用
+func (s *Server) SetDB(database *db.Manager) {
+	s.db = database
+}
+
+// SetBotControl 设置机器人连接器列表引用
+func (s *Server) SetBotControl(registry *bot.Registry, adapters []bot.BotAdapter) {
+	s.botRegistry = registry
+	s.botAdapters = adapters
+}
+
 func (s *Server) BroadcastLog(level, msg string) {
 	data, _ := json.Marshal(map[string]string{
 		"type":  "log",
@@ -174,11 +205,35 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		uptime = fmt.Sprintf("%dh %dm %ds", int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60)
 	}
 
+	var testModeStr string
+	if bot.TestMode {
+		testModeStr = "on"
+	} else {
+		testModeStr = "off"
+	}
+
+	// 收集机器人连接状态
+	type botInfo struct {
+		Platform string `json:"platform"`
+		SelfID   string `json:"self_id"`
+		Running  bool   `json:"running"`
+	}
+	bots := make([]botInfo, 0, len(s.botAdapters))
+	for _, a := range s.botAdapters {
+		bots = append(bots, botInfo{
+			Platform: a.Platform(),
+			SelfID:   a.SelfID(),
+			Running:  a.Running(),
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"code":    0,
-		"version": "0.1.0",
-		"uptime":  uptime,
-		"plugins": s.plugins.Count(),
+		"code":      0,
+		"version":   "0.1.0",
+		"uptime":    uptime,
+		"plugins":   s.plugins.Count(),
+		"test_mode": testModeStr,
+		"bots":      bots,
 	})
 }
 
@@ -356,6 +411,157 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "ok"})
 }
 
+// ==================== API: 消息查询 ====================
+
+func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": -1, "msg": "method not allowed"})
+		return
+	}
+	if s.db == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"code": -1, "msg": "database not available"})
+		return
+	}
+
+	q := r.URL.Query()
+	filter := make(map[string]any)
+	for _, key := range []string{"platform", "user_id", "group_id", "event_type", "message_type"} {
+		if v := q.Get(key); v != "" {
+			filter[key] = v
+		}
+	}
+
+	msgs, err := s.db.QueryMsg(filter)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": -1, "msg": err.Error()})
+		return
+	}
+
+	// 分页
+	limit := 50
+	offset := 0
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	if offset > len(msgs) {
+		msgs = nil
+	} else if offset+limit > len(msgs) {
+		msgs = msgs[offset:]
+	} else {
+		msgs = msgs[offset : offset+limit]
+	}
+
+	if msgs == nil {
+		msgs = []map[string]any{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"code": 0,
+		"data": msgs,
+	})
+}
+
+// ==================== API: Bot 控制 ====================
+
+func (s *Server) handleBot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": -1, "msg": "method not allowed"})
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "read body failed"})
+		return
+	}
+	var req struct {
+		Action   string `json:"action"`   // "start" 或 "stop"
+		Platform string `json:"platform"`
+		SelfID   string `json:"self_id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "invalid json"})
+		return
+	}
+
+	if req.Action == "" || req.Platform == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "action and platform required"})
+		return
+	}
+
+	if s.botRegistry == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"code": -1, "msg": "bot registry not available"})
+		return
+	}
+
+	adapter, ok := s.botRegistry.Get(req.Platform, req.SelfID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"code": -1, "msg": "adapter not found"})
+		return
+	}
+
+	switch req.Action {
+	case "stop":
+		adapter.Stop()
+		writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "stopped"})
+	case "start":
+		go func() {
+			if err := adapter.Start(); err != nil {
+				log.Error("Bot 启动失败", "platform", req.Platform, "self_id", req.SelfID, "error", err)
+			}
+		}()
+		writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "starting"})
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "unknown action: " + req.Action})
+	}
+}
+
+// ==================== API: 测试模式 ====================
+
+func (s *Server) handleTestMode(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		status := "off"
+		if bot.TestMode {
+			status = "on"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"code": 0, "test_mode": status})
+
+	case http.MethodPost:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "read body failed"})
+			return
+		}
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "invalid json"})
+			return
+		}
+
+		bot.TestMode = req.Enabled
+		status := "off"
+		if bot.TestMode {
+			status = "on"
+		}
+		log.Info("测试模式已切换", "test_mode", status)
+		writeJSON(w, http.StatusOK, map[string]any{"code": 0, "test_mode": status})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": -1, "msg": "method not allowed"})
+	}
+}
+
 // ==================== WebSocket ====================
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -466,30 +672,41 @@ func hasKey(data json.RawMessage, key string) (json.RawMessage, bool) {
 	return v, ok
 }
 
-// neuteredFileSystem 防止直接目录列表
-type neuteredFileSystem struct {
-	fs http.FileSystem
-}
-
-func (nfs neuteredFileSystem) Open(path string) (http.File, error) {
-	f, err := nfs.fs.Open(path)
-	if err != nil {
-		return nil, err
+// serveStatic 从嵌入的 embed.FS 中读取静态文件
+func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
+	filePath := r.URL.Path
+	if filePath == "/" {
+		filePath = "/index.html"
 	}
-	s, err := f.Stat()
+	// 嵌入路径前缀 static/
+	data, err := staticFiles.ReadFile("static" + filePath)
 	if err != nil {
-		f.Close()
-		return nil, err
-	}
-	if s.IsDir() {
-		// 检查是否有 index.html
-		indexPath := filepath.Join(path, "index.html")
-		if _, err := nfs.fs.Open(indexPath); os.IsNotExist(err) {
-			f.Close()
-			return nil, err
+		if os.IsNotExist(err) {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintf(w, "404 not found: %s", r.URL.Path)
+			return
 		}
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "500: %v", err)
+		return
 	}
-	return f, nil
+	// 根据扩展名设置 Content-Type
+	ext := path.Ext(filePath)
+	switch ext {
+	case ".html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	case ".css":
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	case ".js":
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	case ".png":
+		w.Header().Set("Content-Type", "image/png")
+	case ".ico":
+		w.Header().Set("Content-Type", "image/x-icon")
+	case ".svg":
+		w.Header().Set("Content-Type", "image/svg+xml")
+	}
+	w.Write(data)
 }
 
 // ==================== WebSocket 辅助 ====================

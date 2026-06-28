@@ -2,6 +2,7 @@ package redlang
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/super1207/langlang-go/internal/log"
@@ -51,11 +52,21 @@ func (s *Scope) Has(name string) bool {
 	return ok
 }
 
+// LoopSignal 循环控制信号
+type LoopSignal int
+
+const (
+	LoopNone     LoopSignal = iota
+	LoopBreak                // 跳出
+	LoopContinue             // 继续
+)
+
 // Runtime 是 RedLang 脚本运行时
 type Runtime struct {
-	Scope     *Scope
-	Globals   *Scope
-	Functions map[string]*BuiltinFunc
+	Scope       *Scope
+	Globals     *Scope
+	Functions   map[string]*BuiltinFunc
+	loopControl LoopSignal
 }
 
 // BuiltinFunc 是内置函数定义
@@ -121,6 +132,116 @@ func (rt *Runtime) Eval(ast Ast) (*RedValue, error) {
 			continue
 		}
 
+		// 处理 计次循环…计次循环尾 结构
+		if node.Type == TypeCommand && node.Cmd.Name == "计次循环" {
+			countVal, err := rt.EvalNode(node)
+			if err != nil {
+				return nil, err
+			}
+			count, _ := strconv.Atoi(countVal.String())
+			i++
+
+			// 收集循环体节点直到 计次循环尾
+			bodyStart := i
+			bodyEnd := len(ast)
+			for j := i; j < len(ast); j++ {
+				if ast[j].Type == TypeCommand && ast[j].Cmd.Name == "计次循环尾" {
+					bodyEnd = j
+					break
+				}
+			}
+			body := ast[bodyStart:bodyEnd]
+
+			// 执行循环
+			rt.loopControl = LoopNone
+			for n := 0; n < count; n++ {
+				if rt.loopControl == LoopBreak {
+					break
+				}
+				// 设置迭代变量
+				rt.Scope.Set("循环次数", NewText(strconv.Itoa(n+1)))
+				// 执行循环体
+			bodyLoop:
+				for _, bodyNode := range body {
+					val, bodyErr := rt.EvalNode(bodyNode)
+					if bodyErr != nil {
+						return nil, bodyErr
+					}
+					if val.Type != ValNull {
+						parts = append(parts, val.String())
+					}
+					switch rt.loopControl {
+					case LoopBreak:
+						break bodyLoop
+					case LoopContinue:
+						rt.loopControl = LoopNone
+						break bodyLoop
+					}
+				}
+			}
+			rt.loopControl = LoopNone
+			i = bodyEnd + 1 // 跳过 计次循环尾
+			continue
+		}
+
+		// 处理 循环…循环尾 结构（条件循环）
+		if node.Type == TypeCommand && node.Cmd.Name == "循环" {
+			condVal, err := rt.EvalNode(node)
+			if err != nil {
+				return nil, err
+			}
+			i++
+
+			// 收集循环体节点直到 循环尾
+			bodyStart := i
+			bodyEnd := len(ast)
+			for j := i; j < len(ast); j++ {
+				if ast[j].Type == TypeCommand && ast[j].Cmd.Name == "循环尾" {
+					bodyEnd = j
+					break
+				}
+			}
+			body := ast[bodyStart:bodyEnd]
+
+			// 执行条件循环
+			rt.loopControl = LoopNone
+			for condVal.IsTrue() {
+				if rt.loopControl == LoopBreak {
+					break
+				}
+			bodyWhileLoop:
+				for _, bodyNode := range body {
+					val, bodyErr := rt.EvalNode(bodyNode)
+					if bodyErr != nil {
+						return nil, bodyErr
+					}
+					if val.Type != ValNull {
+						parts = append(parts, val.String())
+					}
+					switch rt.loopControl {
+					case LoopBreak:
+						break bodyWhileLoop
+					case LoopContinue:
+						rt.loopControl = LoopNone
+						break bodyWhileLoop
+					}
+				}
+				if rt.loopControl == LoopBreak {
+					rt.loopControl = LoopNone
+					break
+				}
+				// 重新求值条件（条件表达式可能依赖变量变化）
+				nextCond, condErr := rt.EvalNode(node)
+				if condErr != nil {
+					return nil, condErr
+				}
+				condVal = nextCond
+			}
+			rt.loopControl = LoopNone
+			i = bodyEnd + 1
+			continue
+		}
+
 		val, err := rt.EvalNode(node)
 		if err != nil {
 			return nil, err
@@ -182,7 +303,17 @@ func (rt *Runtime) callUserFunc(val *RedValue, args []*RedValue) (*RedValue, err
 	if val.Fun == nil {
 		return NewNull(), nil
 	}
-	return rt.Eval(*val.Fun)
+	// 创建子作用域，将参数注入为 参数1..参数N
+	childScope := NewChildScope(rt.Scope)
+	for i, arg := range args {
+		childScope.Set(fmt.Sprintf("参数%d", i+1), arg)
+	}
+	// 同时支持按名称绑定（如果函数定义时指定了参数名，后续可扩展）
+	oldScope := rt.Scope
+	rt.Scope = childScope
+	result, err := rt.Eval(*val.Fun)
+	rt.Scope = oldScope
+	return result, err
 }
 
 // EvalScript 求值完整脚本字符串
@@ -278,6 +409,86 @@ func (rt *Runtime) registerBuiltins() {
 		return NewBool(args[0].String() > args[1].String()), nil
 	})
 
+	// < 小于
+	rt.RegisterFunc("<", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 2 {
+			return NewBool(false), nil
+		}
+		return NewBool(args[0].String() < args[1].String()), nil
+	})
+
+	// >= 大于等于
+	rt.RegisterFunc(">=", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 2 {
+			return NewBool(false), nil
+		}
+		return NewBool(args[0].String() >= args[1].String()), nil
+	})
+
+	// <= 小于等于
+	rt.RegisterFunc("<=", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 2 {
+			return NewBool(false), nil
+		}
+		return NewBool(args[0].String() <= args[1].String()), nil
+	})
+
+	// 加
+	rt.RegisterFunc("加", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 2 {
+			return NewText("0"), nil
+		}
+		a, _ := strconv.ParseFloat(args[0].String(), 64)
+		b, _ := strconv.ParseFloat(args[1].String(), 64)
+		return NewText(fmt.Sprintf("%g", a+b)), nil
+	})
+
+	// 减
+	rt.RegisterFunc("减", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 2 {
+			return NewText("0"), nil
+		}
+		a, _ := strconv.ParseFloat(args[0].String(), 64)
+		b, _ := strconv.ParseFloat(args[1].String(), 64)
+		return NewText(fmt.Sprintf("%g", a-b)), nil
+	})
+
+	// 乘
+	rt.RegisterFunc("乘", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 2 {
+			return NewText("0"), nil
+		}
+		a, _ := strconv.ParseFloat(args[0].String(), 64)
+		b, _ := strconv.ParseFloat(args[1].String(), 64)
+		return NewText(fmt.Sprintf("%g", a*b)), nil
+	})
+
+	// 除
+	rt.RegisterFunc("除", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 2 {
+			return NewText("0"), nil
+		}
+		a, _ := strconv.ParseFloat(args[0].String(), 64)
+		b, _ := strconv.ParseFloat(args[1].String(), 64)
+		if b == 0 {
+			return NewText("0"), nil
+		}
+		return NewText(fmt.Sprintf("%g", a/b)), nil
+	})
+
+	// 模
+	rt.RegisterFunc("模", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 2 {
+			return NewText("0"), nil
+		}
+		a, _ := strconv.ParseInt(args[0].String(), 10, 64)
+		b, _ := strconv.ParseInt(args[1].String(), 10, 64)
+		if b == 0 {
+			return NewText("0"), nil
+		}
+		return NewText(fmt.Sprintf("%d", a%b)), nil
+	})
+
 	// 取文本长度
 	rt.RegisterFunc("取文本长度", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
 		if len(args) == 0 {
@@ -341,6 +552,84 @@ func (rt *Runtime) registerBuiltins() {
 			return NewText(""), nil
 		}
 		return NewText(strings.ReplaceAll(args[0].String(), args[1].String(), args[2].String())), nil
+	})
+
+	// 令 / 赋值 — 将值存入变量（语句级，返回空值避免输出回显）
+	rt.RegisterFunc("令", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 2 {
+			return NewNull(), nil
+		}
+		name := args[0].String()
+		rt.Scope.Set(name, args[1])
+		return NewNull(), nil
+	})
+	rt.RegisterFunc("赋值", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 2 {
+			return NewNull(), nil
+		}
+		name := args[0].String()
+		rt.Scope.Set(name, args[1])
+		return NewNull(), nil
+	})
+
+	// 取 / 读取 — 从变量读取值
+	rt.RegisterFunc("取", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 1 {
+			return NewText(""), nil
+		}
+		name := args[0].String()
+		if val, ok := rt.Scope.Get(name); ok {
+			return val, nil
+		}
+		return NewText(""), nil
+	})
+	rt.RegisterFunc("读取", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 1 {
+			return NewText(""), nil
+		}
+		name := args[0].String()
+		if val, ok := rt.Scope.Get(name); ok {
+			return val, nil
+		}
+		return NewText(""), nil
+	})
+
+	// 计次循环 — 执行 N 次循环体（与 Eval 分组逻辑配合）
+	rt.RegisterFunc("计次循环", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 1 {
+			return NewNull(), nil
+		}
+		return args[0], nil
+	})
+
+	// 计次循环尾 — 循环体结束标记（Eval 层处理，返回空）
+	rt.RegisterFunc("计次循环尾", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		return NewNull(), nil
+	})
+
+	// 循环 — 条件循环（与 Eval 分组逻辑配合）
+	rt.RegisterFunc("循环", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		if len(args) < 1 {
+			return NewNull(), nil
+		}
+		return args[0], nil
+	})
+
+	// 循环尾 — 条件循环尾标记
+	rt.RegisterFunc("循环尾", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		return NewNull(), nil
+	})
+
+	// 跳出 — 跳出当前循环
+	rt.RegisterFunc("跳出", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		rt.loopControl = LoopBreak
+		return NewNull(), nil
+	})
+
+	// 继续 — 跳到下一次迭代
+	rt.RegisterFunc("继续", func(args []*RedValue, rt *Runtime) (*RedValue, error) {
+		rt.loopControl = LoopContinue
+		return NewNull(), nil
 	})
 
 	// 则 — 如果条件分支中，条件为真时返回参数
