@@ -384,6 +384,21 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if botData, ok := raw["bot"]; ok {
+			if onebot11Raw, has := hasKey(botData, "onebot11"); has {
+				var onebotCfgs []config.OneBot11Config
+				if err := json.Unmarshal(onebot11Raw, &onebotCfgs); err == nil {
+					s.cfg.Bot.OneBot11 = onebotCfgs
+				}
+			}
+			if telegramRaw, has := hasKey(botData, "telegram"); has {
+				var telegrams []string
+				if err := json.Unmarshal(telegramRaw, &telegrams); err == nil {
+					s.cfg.Bot.Telegram = telegrams
+				}
+			}
+		}
+
 		if err := s.cfg.Save(s.configPath); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"code": -1, "msg": err.Error()})
 			return
