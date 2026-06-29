@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # v1
-version: 1
+version: 2
 
 project_name: langlang
 
@@ -29,7 +29,7 @@ builds:
       - "7"
     ldflags:
       - -s -w
-      - -X github.com/super1207/langlang-go/internal/version.Version={{ .Version }}
+      - -X github.com/jiyehuanxiang/langlang-go/internal/version.Version={{ .Version }}
     env:
       - CGO_ENABLED=0
 
@@ -39,7 +39,7 @@ archives:
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats: ["zip"]
     files:
       - README.md
       - LICENSE
@@ -50,7 +50,7 @@ checksum:
   algorithm: sha256
 
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 
 release:
   prerelease: auto
