@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/super1207/langlang-go/internal/log"
+	"github.com/jiyehuanxiang/langlang-go/internal/log"
 )
 
 type Event struct {

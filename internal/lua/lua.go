@@ -9,7 +9,7 @@ import (
 
 	lua "github.com/yuin/gopher-lua"
 
-	"github.com/super1207/langlang-go/internal/redlang"
+	"github.com/jiyehuanxiang/langlang-go/internal/redlang"
 )
 
 // ValidateLua 校验 Lua 代码的语法，不执行。

@@ -3,17 +3,17 @@ package main
 import (
 	"sync"
 
-	"github.com/super1207/langlang-go/internal/bot"
-	"github.com/super1207/langlang-go/internal/bot/onebot11"
-	"github.com/super1207/langlang-go/internal/bot/satori"
-	"github.com/super1207/langlang-go/internal/bot/telegram"
-	"github.com/super1207/langlang-go/internal/config"
-	"github.com/super1207/langlang-go/internal/cron"
-	"github.com/super1207/langlang-go/internal/db"
-	"github.com/super1207/langlang-go/internal/log"
-	"github.com/super1207/langlang-go/internal/mqtt"
-	"github.com/super1207/langlang-go/internal/plugin"
-	"github.com/super1207/langlang-go/internal/webui"
+	"github.com/jiyehuanxiang/langlang-go/internal/bot"
+	"github.com/jiyehuanxiang/langlang-go/internal/bot/onebot11"
+	"github.com/jiyehuanxiang/langlang-go/internal/bot/satori"
+	"github.com/jiyehuanxiang/langlang-go/internal/bot/telegram"
+	"github.com/jiyehuanxiang/langlang-go/internal/config"
+	"github.com/jiyehuanxiang/langlang-go/internal/cron"
+	"github.com/jiyehuanxiang/langlang-go/internal/db"
+	"github.com/jiyehuanxiang/langlang-go/internal/log"
+	"github.com/jiyehuanxiang/langlang-go/internal/mqtt"
+	"github.com/jiyehuanxiang/langlang-go/internal/plugin"
+	"github.com/jiyehuanxiang/langlang-go/internal/webui"
 )
 
 // App 是应用主结构，负责编排所有组件

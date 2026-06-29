@@ -14,8 +14,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/super1207/langlang-go/internal/bot"
-	"github.com/super1207/langlang-go/internal/log"
+	"github.com/jiyehuanxiang/langlang-go/internal/bot"
+	"github.com/jiyehuanxiang/langlang-go/internal/log"
 )
 
 // Satori 协议操作码

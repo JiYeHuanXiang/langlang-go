@@ -7,7 +7,7 @@ package bot
 import (
 	"sync"
 
-	"github.com/super1207/langlang-go/internal/event"
+	"github.com/jiyehuanxiang/langlang-go/internal/event"
 )
 
 // BotAdapter 是机器人平台适配器接口

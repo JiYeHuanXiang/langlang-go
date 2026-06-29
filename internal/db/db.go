@@ -10,8 +10,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/super1207/langlang-go/internal/config"
-	"github.com/super1207/langlang-go/internal/log"
+	"github.com/jiyehuanxiang/langlang-go/internal/config"
+	"github.com/jiyehuanxiang/langlang-go/internal/log"
 )
 
 // Database 数据层接口

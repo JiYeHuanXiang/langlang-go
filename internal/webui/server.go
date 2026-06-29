@@ -18,14 +18,15 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/super1207/langlang-go/internal/bot"
-	"github.com/super1207/langlang-go/internal/config"
-	"github.com/super1207/langlang-go/internal/db"
-	"github.com/super1207/langlang-go/internal/event"
-	"github.com/super1207/langlang-go/internal/log"
-	"github.com/super1207/langlang-go/internal/lua"
-	"github.com/super1207/langlang-go/internal/plugin"
-	"github.com/super1207/langlang-go/internal/redlang"
+	"github.com/jiyehuanxiang/langlang-go/internal/bot"
+	"github.com/jiyehuanxiang/langlang-go/internal/config"
+	"github.com/jiyehuanxiang/langlang-go/internal/db"
+	"github.com/jiyehuanxiang/langlang-go/internal/event"
+	"github.com/jiyehuanxiang/langlang-go/internal/log"
+	"github.com/jiyehuanxiang/langlang-go/internal/lua"
+	"github.com/jiyehuanxiang/langlang-go/internal/plugin"
+	"github.com/jiyehuanxiang/langlang-go/internal/redlang"
+	"github.com/jiyehuanxiang/langlang-go/internal/version"
 )
 
 //go:embed all:static
@@ -255,7 +256,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code":                 0,
-		"version":              "0.1.0",
+		"version":              version.Version,
 		"uptime":               uptime,
 		"plugins":              s.plugins.Count(),
 		"test_mode":            testModeStr,

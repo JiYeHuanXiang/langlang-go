@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/super1207/langlang-go/internal/log"
+	"github.com/jiyehuanxiang/langlang-go/internal/log"
 )
 
 // Scope 是 RedLang 的变量作用域

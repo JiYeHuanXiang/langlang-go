@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/super1207/langlang-go/internal/bot"
-	"github.com/super1207/langlang-go/internal/log"
+	"github.com/jiyehuanxiang/langlang-go/internal/bot"
+	"github.com/jiyehuanxiang/langlang-go/internal/log"
 )
 
 const apiBase = "https://api.telegram.org/bot"

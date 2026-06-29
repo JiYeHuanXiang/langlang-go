@@ -1,4 +1,4 @@
-module github.com/super1207/langlang-go
+module github.com/jiyehuanxiang/langlang-go
 
 go 1.22
 

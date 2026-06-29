@@ -23,6 +23,9 @@ Thumbs.db
 # 配置（用户自定义）
 config.json
 
+# GoReleaser 输出
+dist/
+
 # 编译输出
 *.exe
 *.dll

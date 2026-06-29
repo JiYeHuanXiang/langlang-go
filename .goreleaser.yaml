@@ -1,0 +1,78 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# v1
+version: 1
+
+project_name: langlang
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: langlang
+    main: ./cmd/langlang
+    binary: langlang
+    goos:
+      - windows
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - "386"
+    ignore:
+      - goos: darwin
+        goarch: "386"
+      - goos: linux
+        goarch: "386"
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w
+      - -X github.com/super1207/langlang-go/internal/version.Version={{ .Version }}
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - config.default.json
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+release:
+  prerelease: auto
+  header: |
+    ## LangLang-Go {{ .Version }} 预览版
+
+    > 这是一个早期预览版本，可能存在不稳定情况。
+
+  footer: |
+    ---
+
+    **完整更新记录**: [Commits]({{ .GitURL }}/compare/{{ .PreviousTag }}...{{ .Tag }})
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore"
+      - merge conflict
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+      - go mod tidy
