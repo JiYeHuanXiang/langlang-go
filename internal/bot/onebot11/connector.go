@@ -1,8 +1,9 @@
-// Package onebot11 实现 OneBot 11 协议的反向 WebSocket 连接。
-// 用于连接 go-cqhttp、Lagrange 等 OneBot 实现。
+// Package onebot11 实现 OneBot 11 协议。
+// 同时支持反向 WebSocket（连接远程服务器）和正向 WebSocket（等待客户端连接）。
 package onebot11
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,7 +20,8 @@ import (
 
 // Connector OneBot 11 连接器
 type Connector struct {
-	url         string
+	mode        string // "reverse" 或 "forward"
+	url         string // reverse: ws://..., forward: 监听地址
 	accessToken string
 	selfID      string
 	conn        *websocket.Conn
@@ -27,6 +29,7 @@ type Connector struct {
 	running     bool
 	stopCh      chan struct{}
 	dialer      *websocket.Dialer
+	server      *http.Server // forward 模式用的 HTTP 服务
 
 	// echo 应答机制
 	seqCounter     int64
@@ -35,9 +38,11 @@ type Connector struct {
 }
 
 // NewConnector 创建 OneBot 11 连接器
-func NewConnector(wsURL, accessToken, selfID string) *Connector {
+// mode: "reverse"（反向 WS）或 "forward"（正向 WS）
+func NewConnector(mode, addr, accessToken, selfID string) *Connector {
 	return &Connector{
-		url:         wsURL,
+		mode:        mode,
+		url:         addr,
 		accessToken: accessToken,
 		selfID:      selfID,
 		stopCh:      make(chan struct{}),
@@ -61,7 +66,9 @@ func (c *Connector) Running() bool {
 	return c.running
 }
 
-// Start 启动反向 WebSocket 连接
+// Start 启动连接
+// reverse 模式：连接远程 WebSocket 服务器
+// forward 模式：启动本地 WebSocket 服务等待客户端连接
 func (c *Connector) Start() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -71,7 +78,11 @@ func (c *Connector) Start() error {
 	}
 
 	c.running = true
-	go c.connectLoop()
+	if c.mode == "forward" {
+		go c.serveForward()
+	} else {
+		go c.connectLoop()
+	}
 
 	return nil
 }
@@ -88,6 +99,12 @@ func (c *Connector) Stop() {
 	close(c.stopCh)
 	if c.conn != nil {
 		c.conn.Close()
+	}
+	if c.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		c.server.Shutdown(ctx)
+		c.server = nil
 	}
 
 	// 清理所有等待中的请求
@@ -236,6 +253,68 @@ func (c *Connector) connect() error {
 	go c.readLoop(conn)
 
 	return nil
+}
+
+// serveForward 启动正向 WebSocket 服务，等待客户端连接
+func (c *Connector) serveForward() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", c.handleWSUpgrade)
+
+	c.mu.Lock()
+	c.server = &http.Server{
+		Addr:    c.url,
+		Handler: mux,
+	}
+	c.mu.Unlock()
+
+	log.Info("OneBot11 正向 WS 服务启动", "listen", c.url)
+	err := c.server.ListenAndServe()
+	if err != nil && err != http.ErrServerClosed {
+		log.Error("OneBot11 正向 WS 服务异常", "error", err)
+	}
+}
+
+// handleWSUpgrade 处理正向 WS 的 HTTP 升级请求
+func (c *Connector) handleWSUpgrade(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{
+		HandshakeTimeout: 10 * time.Second,
+		CheckOrigin: func(r *http.Request) bool {
+			return true // 允许任意来源
+		},
+	}
+
+	// 验证 Access Token
+	if c.accessToken != "" {
+		token := r.Header.Get("Authorization")
+		if token != "Bearer "+c.accessToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Error("OneBot11 WS 升级失败", "error", err)
+		return
+	}
+
+	c.mu.Lock()
+	// 关闭旧连接（允许重新连接）
+	if c.conn != nil {
+		c.conn.Close()
+	}
+	c.conn = conn
+	c.mu.Unlock()
+
+	log.Info("OneBot11 正向 WS 客户端已连接")
+
+	// 设置 ping/pong 检测
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
+	c.readLoop(conn)
 }
 
 // readLoop 读取 WebSocket 消息并分发到事件系统

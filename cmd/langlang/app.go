@@ -5,6 +5,7 @@ import (
 
 	"github.com/super1207/langlang-go/internal/bot"
 	"github.com/super1207/langlang-go/internal/bot/onebot11"
+	"github.com/super1207/langlang-go/internal/bot/satori"
 	"github.com/super1207/langlang-go/internal/bot/telegram"
 	"github.com/super1207/langlang-go/internal/config"
 	"github.com/super1207/langlang-go/internal/cron"
@@ -64,7 +65,11 @@ func NewApp(cfg *config.Config, configPath string) *App {
 		if ob.URL == "" {
 			continue
 		}
-		conn := onebot11.NewConnector(ob.URL, ob.AccessToken, ob.SelfID)
+		mode := ob.Mode
+		if mode == "" {
+			mode = "reverse"
+		}
+		conn := onebot11.NewConnector(mode, ob.URL, ob.AccessToken, ob.SelfID)
 		app.botConnectors = append(app.botConnectors, conn)
 	}
 
@@ -73,6 +78,14 @@ func NewApp(cfg *config.Config, configPath string) *App {
 			continue
 		}
 		conn := telegram.NewConnector(token)
+		app.botConnectors = append(app.botConnectors, conn)
+	}
+
+	for _, sc := range cfg.Bot.Satori {
+		if sc.URL == "" {
+			continue
+		}
+		conn := satori.NewConnector(sc.URL, sc.Token, sc.SelfID, sc.APIURL)
 		app.botConnectors = append(app.botConnectors, conn)
 	}
 

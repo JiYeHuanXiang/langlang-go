@@ -8,7 +8,8 @@ data/
 plugins/
 logs/
 
-# 系统文件
+# 系统文件 / reasonix 元数据
+.reasonix/
 .DS_Store
 Thumbs.db
 

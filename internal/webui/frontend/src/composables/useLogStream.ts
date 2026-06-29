@@ -100,7 +100,18 @@ export function useLogStream() {
     logs.value = []
   }
 
+  // 连接前先加载环形缓冲区中的已有日志
+  async function loadInitial() {
+    try {
+      const res = await getRecentLogs()
+      if (res.logs && res.logs.length > 0) {
+        logs.value = res.logs
+      }
+    } catch { /* ignore */ }
+  }
+
   // start on creation
+  loadInitial()
   connectWs()
 
   onUnmounted(() => {

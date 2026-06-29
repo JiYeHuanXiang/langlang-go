@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useConfigStore } from '../stores/config'
 import { useToast } from '../composables/useToast'
 import { saveConfig } from '../api/config'
 
 interface BotConn {
-  platform: 'onebot11' | 'telegram'
+  platform: 'onebot11' | 'telegram' | 'satori'
+  mode?: string       // onebot11: reverse/forward
   url?: string
   access_token?: string
   self_id?: string
-  token?: string
+  token?: string      // telegram
+  api_url?: string    // satori
 }
 
 const configStore = useConfigStore()
@@ -17,6 +19,22 @@ const toast = useToast()
 
 const saving = ref(false)
 const savingBot = ref(false)
+
+const LS_KEY_RETENTION = 'logs_retention_minutes'
+
+function loadRetention(): number {
+  try {
+    const saved = localStorage.getItem(LS_KEY_RETENTION)
+    if (saved !== null) return Number(saved)
+  } catch { /* ignore */ }
+  return 0
+}
+
+const logsRetention = ref(loadRetention())
+
+watch(logsRetention, (v) => {
+  localStorage.setItem(LS_KEY_RETENTION, String(v))
+})
 
 const form = ref({
   listen: ':2397',
@@ -33,12 +51,17 @@ function loadBotConfig(cfg: Record<string, any>) {
   const bot = cfg.bot || {}
   if (Array.isArray(bot.onebot11)) {
     for (const ob of bot.onebot11) {
-      botConns.value.push({ platform: 'onebot11', url: ob.url || '', access_token: ob.access_token || '', self_id: ob.self_id || '' })
+      botConns.value.push({ platform: 'onebot11', mode: ob.mode || 'reverse', url: ob.url || '', access_token: ob.access_token || '', self_id: ob.self_id || '' })
     }
   }
   if (Array.isArray(bot.telegram)) {
     for (const t of bot.telegram) {
       botConns.value.push({ platform: 'telegram', token: t })
+    }
+  }
+  if (Array.isArray(bot.satori)) {
+    for (const s of bot.satori) {
+      botConns.value.push({ platform: 'satori', url: s.url || '', token: s.token || '', self_id: s.self_id || '', api_url: s.api_url || '' })
     }
   }
 }
@@ -82,7 +105,7 @@ async function toggleTestMode() {
 }
 
 function addBot() {
-  botConns.value.push({ platform: 'onebot11', url: '', access_token: '', self_id: '' })
+  botConns.value.push({ platform: 'onebot11', mode: 'reverse', url: '', access_token: '', self_id: '' })
 }
 
 function removeBot(idx: number) {
@@ -92,19 +115,23 @@ function removeBot(idx: number) {
 async function saveBot() {
   savingBot.value = true
   try {
-    const onebot11: { url: string; access_token: string; self_id: string }[] = []
+    const onebot11: { mode?: string; url: string; access_token: string; self_id: string }[] = []
     const telegram: string[] = []
+    const satori: { url: string; token: string; self_id: string; api_url: string }[] = []
     for (const conn of botConns.value) {
       if (conn.platform === 'onebot11') {
-        onebot11.push({ url: conn.url || '', access_token: conn.access_token || '', self_id: conn.self_id || '' })
+        onebot11.push({ mode: conn.mode || 'reverse', url: conn.url || '', access_token: conn.access_token || '', self_id: conn.self_id || '' })
       } else if (conn.platform === 'telegram') {
         if (conn.token) telegram.push(conn.token)
+      } else if (conn.platform === 'satori') {
+        satori.push({ url: conn.url || '', token: conn.token || '', self_id: conn.self_id || '', api_url: conn.api_url || '' })
       }
     }
     await saveConfig({
       bot: {
         onebot11: onebot11.length > 0 ? onebot11 : null,
         telegram: telegram.length > 0 ? telegram : null,
+        satori: satori.length > 0 ? satori : null,
       },
     })
     toast.show('机器人配置已保存', 'success')
@@ -186,6 +213,19 @@ async function saveBot() {
           />
         </div>
 
+        <div>
+          <label class="mb-1 block text-xs font-medium text-zinc-500">日志保存时间范围</label>
+          <select v-model="logsRetention" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-red-400">
+            <option :value="0">全部</option>
+            <option :value="5">5 分钟</option>
+            <option :value="15">15 分钟</option>
+            <option :value="30">30 分钟</option>
+            <option :value="60">1 小时</option>
+            <option :value="120">2 小时</option>
+          </select>
+          <p class="mt-1 text-[11px] text-zinc-400">手动保存或自动保存时只保留此时间范围内的日志</p>
+        </div>
+
         <button
           @click="save"
           :disabled="saving"
@@ -225,6 +265,7 @@ async function saveBot() {
             >
               <option value="onebot11">OneBot 11</option>
               <option value="telegram">Telegram</option>
+              <option value="satori">Satori</option>
             </select>
             <button
               @click="removeBot(idx)"
@@ -237,10 +278,20 @@ async function saveBot() {
           <!-- OneBot 11 字段 -->
           <template v-if="conn.platform === 'onebot11'">
             <div class="mb-2">
-              <label class="mb-1 block text-[11px] font-medium text-zinc-500">WebSocket 地址</label>
+              <label class="mb-1 block text-[11px] font-medium text-zinc-500">连接模式</label>
+              <select
+                v-model="conn.mode"
+                class="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-xs outline-none focus:border-red-400"
+              >
+                <option value="reverse">反向 WS（连接远程服务器）</option>
+                <option value="forward">正向 WS（等待客户端连接）</option>
+              </select>
+            </div>
+            <div class="mb-2">
+              <label class="mb-1 block text-[11px] font-medium text-zinc-500">{{ conn.mode === 'forward' ? '监听地址' : 'WebSocket 地址' }}</label>
               <input
                 v-model="conn.url"
-                placeholder="ws://127.0.0.1:6700"
+                :placeholder="conn.mode === 'forward' ? ':6700' : 'ws://127.0.0.1:6700'"
                 class="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-mono outline-none focus:border-red-400"
               />
             </div>
@@ -269,6 +320,42 @@ async function saveBot() {
               <input
                 v-model="conn.token"
                 placeholder="123456:ABCdefGHIjklmNOPqrstUVwxyz"
+                class="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-mono outline-none focus:border-red-400"
+              />
+            </div>
+          </template>
+
+          <!-- Satori 字段 -->
+          <template v-if="conn.platform === 'satori'">
+            <div class="mb-2">
+              <label class="mb-1 block text-[11px] font-medium text-zinc-500">WebSocket 地址</label>
+              <input
+                v-model="conn.url"
+                placeholder="ws://127.0.0.1:5500"
+                class="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-mono outline-none focus:border-red-400"
+              />
+            </div>
+            <div class="mb-2">
+              <label class="mb-1 block text-[11px] font-medium text-zinc-500">Token</label>
+              <input
+                v-model="conn.token"
+                placeholder="鉴权令牌"
+                class="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-mono outline-none focus:border-red-400"
+              />
+            </div>
+            <div class="mb-2">
+              <label class="mb-1 block text-[11px] font-medium text-zinc-500">REST API 地址（可选）</label>
+              <input
+                v-model="conn.api_url"
+                placeholder="留空则从 WS 地址推导 http://127.0.0.1:5500"
+                class="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-mono outline-none focus:border-red-400"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-[11px] font-medium text-zinc-500">Self ID（可选）</label>
+              <input
+                v-model="conn.self_id"
+                placeholder="留空则自动获取"
                 class="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-mono outline-none focus:border-red-400"
               />
             </div>

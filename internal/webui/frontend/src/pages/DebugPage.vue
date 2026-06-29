@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { debugMessage } from '../api/debug'
 import { useBotsStore } from '../stores/bots'
 import { useToast } from '../composables/useToast'
@@ -7,12 +7,33 @@ import { useToast } from '../composables/useToast'
 const botsStore = useBotsStore()
 const toast = useToast()
 
-const platform = ref('debug')
-const messageType = ref('private')
-const userId = ref('debug_user')
-const groupId = ref('debug_group')
+const LS_KEY_DEBUG = 'debug_form'
+const LS_KEY_HISTORY = 'debug_history'
+
+function loadDebugForm() {
+  try {
+    const saved = localStorage.getItem(LS_KEY_DEBUG)
+    if (saved) return JSON.parse(saved)
+  } catch { /* ignore */ }
+  return {}
+}
+
+const savedForm = loadDebugForm()
+const platform = ref(savedForm.platform ?? 'debug')
+const messageType = ref(savedForm.messageType ?? 'private')
+const userId = ref(savedForm.userId ?? 'debug_user')
+const groupId = ref(savedForm.groupId ?? 'debug_group')
 const message = ref('')
 const sending = ref(false)
+
+watch([platform, messageType, userId, groupId], () => {
+  localStorage.setItem(LS_KEY_DEBUG, JSON.stringify({
+    platform: platform.value,
+    messageType: messageType.value,
+    userId: userId.value,
+    groupId: groupId.value,
+  }))
+}, { deep: true })
 
 interface HistoryItem {
   platform: string
@@ -23,7 +44,24 @@ interface HistoryItem {
   time: string
 }
 
-const history = ref<HistoryItem[]>([])
+function loadHistory(): HistoryItem[] {
+  try {
+    const saved = localStorage.getItem(LS_KEY_HISTORY)
+    if (saved) return JSON.parse(saved)
+  } catch { /* ignore */ }
+  return []
+}
+
+const history = ref<HistoryItem[]>(loadHistory())
+
+watch(history, (v) => {
+  // 只保留最近 50 条
+  const trimmed = v.slice(-50)
+  localStorage.setItem(LS_KEY_HISTORY, JSON.stringify(trimmed))
+  if (trimmed.length < v.length) {
+    history.value = trimmed
+  }
+}, { deep: true })
 
 onMounted(() => botsStore.fetchStatus())
 
@@ -56,8 +94,12 @@ async function send() {
 const platformLabels: Record<string, string> = {
   onebot11: 'OneBot11',
   telegram: 'Telegram',
+  satori: 'Satori',
   debug: 'Debug（通用）',
 }
+
+// 系统支持的所有平台（用于调试页的选项列表）
+const KNOWN_PLATFORMS = ['onebot11', 'telegram', 'satori', 'debug']
 </script>
 
 <template>
@@ -71,7 +113,7 @@ const platformLabels: Record<string, string> = {
         <div>
           <label class="mb-1 block text-xs font-medium text-zinc-500">模拟平台</label>
           <select v-model="platform" class="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-red-400">
-            <option v-for="p in [...botsStore.configuredPlatforms, 'debug']" :key="p" :value="p">
+            <option v-for="p in KNOWN_PLATFORMS" :key="p" :value="p">
               {{ platformLabels[p] || p }}
             </option>
           </select>

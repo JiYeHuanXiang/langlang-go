@@ -48,12 +48,22 @@ type WebConfig struct {
 type BotConfig struct {
 	OneBot11 []OneBot11Config `json:"onebot11"`
 	Telegram []string         `json:"telegram"`
+	Satori   []SatoriConfig   `json:"satori"`
 }
 
 type OneBot11Config struct {
+	Mode        string `json:"mode"`
 	URL         string `json:"url"`
 	AccessToken string `json:"access_token"`
 	SelfID      string `json:"self_id"`
+}
+
+// SatoriConfig Satori 协议连接配置
+type SatoriConfig struct {
+	URL     string `json:"url"`
+	Token   string `json:"token"`
+	SelfID  string `json:"self_id"`
+	APIURL  string `json:"api_url"`
 }
 
 type MQTTConfig struct {

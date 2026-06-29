@@ -249,6 +249,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if len(s.cfg.Bot.Telegram) > 0 {
 		configuredPlatforms = append(configuredPlatforms, "telegram")
 	}
+	if len(s.cfg.Bot.Satori) > 0 {
+		configuredPlatforms = append(configuredPlatforms, "satori")
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code":                 0,
@@ -395,6 +398,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				var telegrams []string
 				if err := json.Unmarshal(telegramRaw, &telegrams); err == nil {
 					s.cfg.Bot.Telegram = telegrams
+				}
+			}
+			if satoriRaw, has := hasKey(botData, "satori"); has {
+				var satoriCfgs []config.SatoriConfig
+				if err := json.Unmarshal(satoriRaw, &satoriCfgs); err == nil {
+					s.cfg.Bot.Satori = satoriCfgs
 				}
 			}
 		}
@@ -703,7 +712,7 @@ func (s *Server) handleDebugMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info("调试消息已分发",
+	log.Warn("[调试] 消息已分发",
 		"platform", platform,
 		"user_id", userID,
 		"group_id", groupID,
