@@ -31,8 +31,9 @@ const (
 
 // AstCmd 表示一个命令调用： 【命令名】@参数1@参数2
 type AstCmd struct {
-	Name string   // 命令名
-	Args []Ast    // 每个参数又是一个 Ast（支持嵌套）
+	Name    string   // 命令名
+	Args    []Ast    // 每个参数又是一个 Ast（支持嵌套）
+	RawBody string   // 原始函数体文本（仅函数定义时使用）
 }
 
 // Ast 是一组表达式的列表（可嵌套）
@@ -60,9 +61,14 @@ func (a Ast) String() string {
 				b.WriteRune(ch)
 			}
 			b.WriteString("】")
-			for _, arg := range node.Cmd.Args {
+			if node.Cmd.RawBody != "" {
 				b.WriteRune('@')
-				b.WriteString(arg.String())
+				b.WriteString(node.Cmd.RawBody)
+			} else {
+				for _, arg := range node.Cmd.Args {
+					b.WriteRune('@')
+					b.WriteString(arg.String())
+				}
 			}
 		}
 	}
@@ -144,6 +150,35 @@ func (v *RedValue) IsTrue() bool {
 		return true
 	}
 	return false
+}
+
+// ToSimple 将 RedValue 转换为简单的 Go 类型（用于 JSON 序列化）
+func (v *RedValue) ToSimple() any {
+	if v == nil {
+		return nil
+	}
+	switch v.Type {
+	case ValText:
+		return v.Text
+	case ValArray:
+		result := make([]any, len(v.Array))
+		for i, item := range v.Array {
+			result[i] = item.ToSimple()
+		}
+		return result
+	case ValObject:
+		result := make(map[string]any)
+		for k, val := range v.Object {
+			result[k] = val.ToSimple()
+		}
+		return result
+	case ValBin:
+		return v.Bin
+	case ValFun:
+		return "[function]"
+	default:
+		return v.String()
+	}
 }
 
 // String 返回值的字符串表示

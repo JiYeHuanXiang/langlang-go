@@ -35,6 +35,10 @@ export function deletePlugin(name: string) {
   return api.request('DELETE', `/api/plugin/${encodeURIComponent(name)}`)
 }
 
+export function togglePlugin(name: string, enabled: boolean) {
+  return api.request('PUT', `/api/plugin/${encodeURIComponent(name)}`, { enabled })
+}
+
 export function reloadPlugins() {
   return api.request('POST', '/api/reload')
 }

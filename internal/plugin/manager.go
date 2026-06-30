@@ -107,6 +107,20 @@ func (m *Manager) Save(name, code, lang string) error {
 	return m.writeToDisk(name)
 }
 
+// SetEnabled 设置插件的启用状态
+func (m *Manager) SetEnabled(name string, enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pkg, ok := m.plugins[name]
+	if !ok {
+		return os.ErrNotExist
+	}
+	pkg.Enabled = enabled
+	pkg.UpdatedAt = time.Now()
+	return m.writeToDisk(name)
+}
+
 // Delete 删除插件
 func (m *Manager) Delete(name string) {
 	m.mu.Lock()

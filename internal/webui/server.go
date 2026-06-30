@@ -321,6 +321,25 @@ func (s *Server) handlePlugin(w http.ResponseWriter, r *http.Request) {
 		s.plugins.Delete(name)
 		writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "deleted"})
 
+	case http.MethodPut:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "read body failed"})
+			return
+		}
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "invalid json"})
+			return
+		}
+		if err := s.plugins.SetEnabled(name, req.Enabled); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"code": -1, "msg": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "toggled"})
+
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": -1, "msg": "method not allowed"})
 	}

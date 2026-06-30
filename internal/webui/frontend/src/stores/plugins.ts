@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getPlugins, savePlugin, deletePlugin, reloadPlugins, validateCode, type PluginInfo } from '../api/plugins'
+import { getPlugins, savePlugin, deletePlugin, reloadPlugins, validateCode, togglePlugin, type PluginInfo } from '../api/plugins'
 
 export const usePluginsStore = defineStore('plugins', () => {
   const plugins = ref<PluginInfo[]>([])
@@ -26,6 +26,11 @@ export const usePluginsStore = defineStore('plugins', () => {
     await fetchAll()
   }
 
+  async function toggle(name: string, enabled: boolean) {
+    await togglePlugin(name, enabled)
+    await fetchAll()
+  }
+
   async function reload() {
     await reloadPlugins()
     await fetchAll()
@@ -35,5 +40,5 @@ export const usePluginsStore = defineStore('plugins', () => {
     return validateCode(code, lang)
   }
 
-  return { plugins, loading, fetchAll, save, remove, reload, validate }
+  return { plugins, loading, fetchAll, save, remove, reload, validate, toggle }
 })

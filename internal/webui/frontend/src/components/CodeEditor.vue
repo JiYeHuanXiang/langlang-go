@@ -70,6 +70,17 @@ function destroyEditor() {
   }
 }
 
+watch(() => props.modelValue, (newVal) => {
+  if (view) {
+    const current = view.state.doc.toString()
+    if (newVal !== current) {
+      view.dispatch({
+        changes: { from: 0, to: current.length, insert: newVal },
+      })
+    }
+  }
+})
+
 watch(() => props.lang, () => {
   destroyEditor()
   createEditor()

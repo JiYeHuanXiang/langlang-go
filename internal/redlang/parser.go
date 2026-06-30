@@ -37,7 +37,8 @@ func ParseExpr(input string) (AstNode, error) {
 	return nodes[0], nil
 }
 
-// removeComment 移除注释（从 `//` 或 `#` 到行尾）
+// removeComment 移除注释（从 `##` 到行尾，或从 `#` 到行尾，与原始 RedLang 规范一致）
+// 注意：不处理 `//`，因为 `//` 在 【计算】 表达式中用作整除运算符
 func (p *AstParser) removeComment() {
 	var out []rune
 	i := 0
@@ -49,8 +50,8 @@ func (p *AstParser) removeComment() {
 			i += 2
 			continue
 		}
-		if (ch == '/' && i+1 < len(p.input) && p.input[i+1] == '/') ||
-			ch == '#' {
+		// RedLang 注释：## 到行尾，或 # 到行尾
+		if ch == '#' {
 			// 跳过到行尾
 			for i < len(p.input) && p.input[i] != '\n' {
 				i++
@@ -144,6 +145,11 @@ func (p *AstParser) parseCommand() (*AstCmd, error) {
 		p.pos++
 	}
 
+	// 判断是否是原始函数体命令（需要捕获原始文本）
+	rawBodyCmds := map[string]bool{
+		"函数定义": true,
+	}
+
 	// 解析参数：连续 @arg1@arg2...
 	// 每个参数要么是一个嵌套命令（@【命令】），要么是纯文本（@文本）
 	for p.pos < len(p.input) && p.input[p.pos] == '@' {
@@ -151,6 +157,32 @@ func (p *AstParser) parseCommand() (*AstCmd, error) {
 
 		if p.pos >= len(p.input) {
 			break
+		}
+
+		// 如果是原始函数体命令，捕获所有内容直到匹配的 】
+		if rawBodyCmds[cmd.Name] {
+			depth := 1
+			start := p.pos
+			for p.pos < len(p.input) && depth > 0 {
+				ch := p.input[p.pos]
+				if ch == '【' {
+					depth++
+				} else if ch == '】' {
+					depth--
+					if depth == 0 {
+						break
+					}
+				}
+				p.pos++
+			}
+			rawBody := string(p.input[start:p.pos])
+			rawBody = strings.TrimSpace(rawBody)
+			cmd.RawBody = rawBody
+			// 跳过 】
+			if p.pos < len(p.input) && p.input[p.pos] == '】' {
+				p.pos++
+			}
+			return cmd, nil
 		}
 
 		var argAst Ast

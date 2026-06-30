@@ -122,6 +122,13 @@ async function doReload() {
             <td class="px-5 py-2.5">
               <div class="flex gap-2">
                 <button
+                  @click="pluginsStore.toggle(p.name, !p.enabled)"
+                  :class="p.enabled ? 'border-red-200 text-red-600 hover:bg-red-50' : 'border-green-200 text-green-600 hover:bg-green-50'"
+                  class="rounded-lg border px-3 py-1 text-xs"
+                >
+                  {{ p.enabled ? '停用' : '启用' }}
+                </button>
+                <button
                   @click="router.push(`/editor?name=${encodeURIComponent(p.name)}`)"
                   class="rounded-lg border border-zinc-200 px-3 py-1 text-xs hover:bg-zinc-50"
                 >
