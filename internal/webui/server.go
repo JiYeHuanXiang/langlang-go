@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -95,7 +96,6 @@ func (s *Server) Start() error {
 	mux.Handle("/", s.cors(http.HandlerFunc(s.serveStatic)))
 
 	s.server = &http.Server{
-		Addr:              s.cfg.Web.Listen,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -105,9 +105,18 @@ func (s *Server) Start() error {
 
 	go s.hub.Run()
 
+	// 端口冲突自动递增：尝试绑定端口，被占用则依次尝试 +1, +2, ...
+	ln, actualAddr := s.listenWithFallback(s.cfg.Web.Listen, 10)
+	if ln == nil {
+		return fmt.Errorf("无法绑定 Web UI 端口: %s（已尝试 10 个端口）", s.cfg.Web.Listen)
+	}
+	// 更新配置中的监听地址，使后续 API 能获取实际端口
+	s.cfg.Web.Listen = actualAddr
+	s.server.Addr = actualAddr
+
 	go func() {
-		log.Info("Web UI 启动", "addr", s.cfg.Web.Listen)
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Info("Web UI 启动", "addr", actualAddr)
+		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Error("HTTP Server 错误", "error", err)
 		}
 	}()
@@ -128,6 +137,45 @@ func (s *Server) Stop() {
 		s.server = nil
 	}
 	s.running = false
+}
+
+// listenWithFallback 尝试绑定端口，被占用时自动递增，最多尝试 maxRetries 次
+// 返回成功绑定的 listener 和实际使用的地址；绑定全部失败时返回 nil, ""
+func (s *Server) listenWithFallback(listenAddr string, maxRetries int) (net.Listener, string) {
+	host, portStr, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		// 地址格式异常，直接尝试原始值
+		ln, err := net.Listen("tcp", listenAddr)
+		if err != nil {
+			return nil, ""
+		}
+		return ln, listenAddr
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, ""
+	}
+
+	for i := 0; i < maxRetries; i++ {
+		tryPort := port + i
+		addr := net.JoinHostPort(host, strconv.Itoa(tryPort))
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			if i > 0 {
+				log.Warn("端口已被占用，已自动切换",
+					"原始端口", port,
+					"实际端口", tryPort,
+				)
+			}
+			return ln, addr
+		}
+		log.Warn("端口绑定失败，尝试下一个",
+			"addr", addr,
+			"error", err,
+		)
+	}
+	return nil, ""
 }
 
 // BroadcastLog 广播日志到所有 WebSocket 客户端
