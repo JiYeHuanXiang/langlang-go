@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { EditorView, basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
 import { StreamLanguage, type StringStream } from '@codemirror/language'
 import { lua } from '@codemirror/legacy-modes/mode/lua'
+import { javascript } from '@codemirror/legacy-modes/mode/javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 
 const props = defineProps<{
   modelValue: string
-  lang: 'redlang' | 'lua'
+  lang: 'redlang' | 'lua' | 'javascript'
   readonly?: boolean
 }>()
 
@@ -38,7 +39,11 @@ const redlangLanguage = StreamLanguage.define({
 function createEditor() {
   if (!container.value) return
 
-  const langExt = props.lang === 'lua' ? lua() : redlangLanguage
+  const langExt = props.lang === 'lua'
+    ? StreamLanguage.define(lua)
+    : props.lang === 'javascript'
+      ? StreamLanguage.define(javascript)
+      : redlangLanguage
   const extensions = [
     basicSetup,
     oneDark,
@@ -81,8 +86,9 @@ watch(() => props.modelValue, (newVal) => {
   }
 })
 
-watch(() => props.lang, () => {
+watch(() => props.lang, async () => {
   destroyEditor()
+  await nextTick()
   createEditor()
 })
 

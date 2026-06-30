@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -23,6 +24,7 @@ import (
 	"github.com/jiyehuanxiang/langlang-go/internal/db"
 	"github.com/jiyehuanxiang/langlang-go/internal/event"
 	"github.com/jiyehuanxiang/langlang-go/internal/log"
+	"github.com/jiyehuanxiang/langlang-go/internal/js"
 	"github.com/jiyehuanxiang/langlang-go/internal/lua"
 	"github.com/jiyehuanxiang/langlang-go/internal/plugin"
 	"github.com/jiyehuanxiang/langlang-go/internal/redlang"
@@ -84,6 +86,8 @@ func (s *Server) Start() error {
 	mux.Handle("/ws", s.cors(http.HandlerFunc(s.handleWebSocket)))
 	mux.Handle("/api/debug/message", apiAuth(s.handleDebugMessage))
 	mux.Handle("/api/log/recent", apiAuth(s.handleLogRecent))
+	mux.Handle("/api/script/run", apiAuth(s.handleScriptRun))
+	mux.Handle("/api/script/stop", apiAuth(s.handleScriptStop))
 
 	// 静态文件（从嵌入的 FS 中读取，无需外部目录）
 	mux.Handle("/", s.cors(http.HandlerFunc(s.serveStatic)))
@@ -478,6 +482,8 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	switch req.Lang {
 	case "lua":
 		validateErr = lua.ValidateLua(req.Code)
+	case "javascript":
+		validateErr = js.ValidateJS(req.Code)
 	default:
 		// 默认使用 RedLang 校验（兼容旧版本未传 lang 字段）
 		validateErr = redlang.ValidateCode(req.Code)
@@ -758,6 +764,149 @@ func (s *Server) handleLogRecent(w http.ResponseWriter, r *http.Request) {
 		"code": 0,
 		"logs": entries,
 	})
+}
+
+// ==================== API: 脚本执行 ====================
+
+// scriptRunner 管理本地脚本测试执行
+var scriptRunner struct {
+	mu       sync.Mutex
+	cancel   *atomic.Bool
+	cancelCh chan struct{}
+	running  bool
+}
+
+func (s *Server) handleScriptRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": -1, "msg": "method not allowed"})
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "read body failed"})
+		return
+	}
+	var req struct {
+		Code    string `json:"code"`
+		Lang    string `json:"lang"`
+		Timeout int    `json:"timeout"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "invalid json"})
+		return
+	}
+	if req.Code == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "code is required"})
+		return
+	}
+	timeoutSec := req.Timeout
+	if timeoutSec <= 0 {
+		timeoutSec = 10
+	}
+	if timeoutSec > 60 {
+		timeoutSec = 60
+	}
+
+	scriptRunner.mu.Lock()
+	if scriptRunner.running {
+		scriptRunner.mu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]any{"code": -1, "msg": "已有脚本正在执行"})
+		return
+	}
+	cancelled := &atomic.Bool{}
+	cancelCh := make(chan struct{})
+	scriptRunner.cancel = cancelled
+	scriptRunner.cancelCh = cancelCh
+	scriptRunner.running = true
+	scriptRunner.mu.Unlock()
+
+	defer func() {
+		scriptRunner.mu.Lock()
+		scriptRunner.running = false
+		scriptRunner.cancel = nil
+		scriptRunner.cancelCh = nil
+		scriptRunner.mu.Unlock()
+	}()
+
+	type result struct {
+		output string
+		err    error
+	}
+	resultCh := make(chan result, 1)
+	startTime := time.Now()
+
+	go func() {
+		switch req.Lang {
+		case "lua":
+			out, execErr := s.runLua(req.Code)
+			resultCh <- result{out, execErr}
+		case "javascript":
+			out, execErr := s.runJS(req.Code)
+			resultCh <- result{out, execErr}
+		default:
+			out, execErr := s.runRedLang(req.Code)
+			resultCh <- result{out, execErr}
+		}
+	}()
+
+	select {
+	case res := <-resultCh:
+		dur := time.Since(startTime).Milliseconds()
+		if cancelled.Load() {
+			writeJSON(w, http.StatusOK, map[string]any{"code": 0, "output": "", "error": "已取消", "duration_ms": dur, "cancelled": true})
+			return
+		}
+		if res.err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"code": -1, "output": "", "error": res.err.Error(), "duration_ms": dur})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"code": 0, "output": res.output, "duration_ms": dur})
+
+	case <-time.After(time.Duration(timeoutSec) * time.Second):
+		cancelled.Store(true)
+		dur := time.Since(startTime).Milliseconds()
+		writeJSON(w, http.StatusOK, map[string]any{"code": -1, "output": "", "error": fmt.Sprintf("执行超时（%d秒）", timeoutSec), "duration_ms": dur, "timeout": true})
+
+	case <-cancelCh:
+		cancelled.Store(true)
+		dur := time.Since(startTime).Milliseconds()
+		writeJSON(w, http.StatusOK, map[string]any{"code": 0, "output": "", "error": "已取消", "duration_ms": dur, "cancelled": true})
+	}
+}
+
+func (s *Server) handleScriptStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": -1, "msg": "method not allowed"})
+		return
+	}
+	scriptRunner.mu.Lock()
+	defer scriptRunner.mu.Unlock()
+
+	if !scriptRunner.running || scriptRunner.cancelCh == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"code": -1, "msg": "没有正在执行的脚本"})
+		return
+	}
+
+	select {
+	case <-scriptRunner.cancelCh:
+		// already closed
+	default:
+		close(scriptRunner.cancelCh)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "已发送取消信号"})
+}
+
+func (s *Server) runRedLang(code string) (string, error) {
+	return redlang.EvalScript(code)
+}
+
+func (s *Server) runLua(code string) (string, error) {
+	return lua.EvalLua(code, redlang.GlobalApp)
+}
+
+func (s *Server) runJS(code string) (string, error) {
+	return js.EvalJS(code, redlang.GlobalApp)
 }
 
 // ==================== WebSocket ====================

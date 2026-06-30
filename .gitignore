@@ -8,6 +8,9 @@ data/
 plugins/
 logs/
 
+# 本地测试
+tests/
+
 # 系统文件 / reasonix 元数据
 .reasonix/
 .DS_Store
