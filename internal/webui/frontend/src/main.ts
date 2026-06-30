@@ -8,6 +8,7 @@ import DashboardPage from './pages/DashboardPage.vue'
 import PluginsPage from './pages/PluginsPage.vue'
 import EditorPage from './pages/EditorPage.vue'
 import LogsPage from './pages/LogsPage.vue'
+import SendPage from './pages/SendPage.vue'
 import DebugPage from './pages/DebugPage.vue'
 import SettingsPage from './pages/SettingsPage.vue'
 
@@ -16,6 +17,7 @@ const routes = [
   { path: '/plugins', component: PluginsPage },
   { path: '/editor', component: EditorPage },
   { path: '/logs', component: LogsPage },
+  { path: '/send', component: SendPage },
   { path: '/debug', component: DebugPage },
   { path: '/settings', component: SettingsPage },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

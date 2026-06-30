@@ -82,12 +82,19 @@ func (c *Connector) Start() error {
 		return nil
 	}
 
+	// 重置 stopCh（Stop() 会关闭旧通道，这里创建新的以支持重启）
+	c.stopCh = make(chan struct{})
+
 	// 先获取 bot 信息，拿到 selfID
 	info, err := c.getMe()
 	if err != nil {
 		log.Warn("Telegram getMe 失败", "error", err)
 	} else {
+		oldSelfID := c.selfID
 		c.selfID = strconv.FormatInt(info.ID, 10)
+		// 同步更新全局注册表
+		bot.GlobalRegistry.Unregister(c.Platform(), oldSelfID)
+		bot.GlobalRegistry.Register(c)
 	}
 
 	c.running = true
@@ -169,6 +176,9 @@ func (c *Connector) getMe() (*botUser, error) {
 func (c *Connector) pollLoop() {
 	log.Info("Telegram 长轮询已启动")
 
+	backoff := 1 * time.Second
+	maxBackoff := 60 * time.Second
+
 	for {
 		select {
 		case <-c.stopCh:
@@ -179,15 +189,20 @@ func (c *Connector) pollLoop() {
 
 		updates, err := c.getUpdates()
 		if err != nil {
-			log.Warn("Telegram getUpdates 失败", "error", err)
+			log.Warn("Telegram getUpdates 失败", "error", err, "backoff", backoff)
 			select {
 			case <-c.stopCh:
 				return
-			case <-time.After(3 * time.Second):
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
 			}
 			continue
 		}
 
+		backoff = 1 * time.Second
 		for _, upd := range updates {
 			c.handleUpdate(upd)
 			c.offset = upd.UpdateID + 1

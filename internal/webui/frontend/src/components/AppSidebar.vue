@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
 import { computed } from 'vue'
-import { LayoutDashboard, Package, Pen, ScrollText, Bug, Settings, type LucideIcon } from 'lucide-vue-next'
+import { LayoutDashboard, Package, Pen, ScrollText, Send, Bug, Settings, type LucideIcon } from 'lucide-vue-next'
 
 interface NavItem {
   path: string
@@ -14,6 +14,7 @@ const navItems: NavItem[] = [
   { path: '/plugins', label: '插件管理', icon: Package },
   { path: '/editor', label: '脚本编辑', icon: Pen },
   { path: '/logs', label: '运行日志', icon: ScrollText },
+  { path: '/send', label: '发送消息', icon: Send },
   { path: '/debug', label: '调试', icon: Bug },
   { path: '/settings', label: '系统设置', icon: Settings },
 ]

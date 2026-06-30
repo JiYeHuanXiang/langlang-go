@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useConfigStore } from '../stores/config'
 import { useToast } from '../composables/useToast'
 import { saveConfig } from '../api/config'
+import { botControl } from '../api/bots'
+import { getStatus } from '../api/status'
 
 interface BotConn {
   platform: 'onebot11' | 'telegram' | 'satori'
@@ -12,6 +14,13 @@ interface BotConn {
   self_id?: string
   token?: string      // telegram
   api_url?: string    // satori
+  enabled: boolean    // false = 禁用（下次启动时不连接）
+}
+
+interface BotStatus {
+  platform: string
+  self_id: string
+  running: boolean
 }
 
 const configStore = useConfigStore()
@@ -19,6 +28,8 @@ const toast = useToast()
 
 const saving = ref(false)
 const savingBot = ref(false)
+const botStatuses = ref<BotStatus[]>([])
+let statusTimer: ReturnType<typeof setInterval> | null = null
 
 const LS_KEY_RETENTION = 'logs_retention_minutes'
 
@@ -32,8 +43,8 @@ function loadRetention(): number {
 
 const logsRetention = ref(loadRetention())
 
-watch(logsRetention, (v) => {
-  localStorage.setItem(LS_KEY_RETENTION, String(v))
+watch(logsRetention, (t) => {
+  localStorage.setItem(LS_KEY_RETENTION, String(t))
 })
 
 const form = ref({
@@ -51,19 +62,59 @@ function loadBotConfig(cfg: Record<string, any>) {
   const bot = cfg.bot || {}
   if (Array.isArray(bot.onebot11)) {
     for (const ob of bot.onebot11) {
-      botConns.value.push({ platform: 'onebot11', mode: ob.mode || 'reverse', url: ob.url || '', access_token: ob.access_token || '', self_id: ob.self_id || '' })
+      let url = ob.url || ''
+      const mode = ob.mode || 'reverse'
+      // 反向 WS 模式不需要 ws:// 前缀，只保留监听地址方便编辑
+      if (mode === 'forward') {
+        url = url.replace(/^wss?:\/\//, '')
+      }
+      botConns.value.push({
+        platform: 'onebot11',
+        mode,
+        url,
+        access_token: ob.access_token || '',
+        self_id: ob.self_id || '',
+        enabled: ob.enabled !== false,
+      })
     }
   }
   if (Array.isArray(bot.telegram)) {
     for (const t of bot.telegram) {
-      botConns.value.push({ platform: 'telegram', token: t })
+      const token = typeof t === 'string' ? t : (t.token || '')
+      const enabled = typeof t === 'string' ? true : (t.enabled !== false)
+      botConns.value.push({ platform: 'telegram', token, enabled })
     }
   }
   if (Array.isArray(bot.satori)) {
     for (const s of bot.satori) {
-      botConns.value.push({ platform: 'satori', url: s.url || '', token: s.token || '', self_id: s.self_id || '', api_url: s.api_url || '' })
+      botConns.value.push({
+        platform: 'satori',
+        url: s.url || '',
+        token: s.token || '',
+        self_id: s.self_id || '',
+        api_url: s.api_url || '',
+        enabled: s.enabled !== false,
+      })
     }
   }
+}
+
+async function fetchBotStatus() {
+  try {
+    const res = await getStatus()
+    botStatuses.value = res.bots || []
+  } catch { /* ignore */ }
+}
+
+function getBotStatus(conn: BotConn): BotStatus | undefined {
+  const connSelfId = conn.self_id || ''
+  // 如果 self_id 为空（自动获取），按平台匹配第一个
+  if (!connSelfId) {
+    return botStatuses.value.find(b => b.platform === conn.platform)
+  }
+  return botStatuses.value.find(
+    b => b.platform === conn.platform && b.self_id === connSelfId
+  )
 }
 
 onMounted(async () => {
@@ -75,6 +126,15 @@ onMounted(async () => {
   form.value.skipMsgMinutes = cfg.core?.skip_msg_minutes || 10
   form.value.dataDir = cfg.paths?.data || 'data'
   loadBotConfig(cfg)
+  await fetchBotStatus()
+  statusTimer = setInterval(fetchBotStatus, 5000)
+})
+
+onUnmounted(() => {
+  if (statusTimer) {
+    clearInterval(statusTimer)
+    statusTimer = null
+  }
 })
 
 async function save() {
@@ -105,7 +165,7 @@ async function toggleTestMode() {
 }
 
 function addBot() {
-  botConns.value.push({ platform: 'onebot11', mode: 'reverse', url: '', access_token: '', self_id: '' })
+  botConns.value.push({ platform: 'onebot11', mode: 'reverse', url: '', access_token: '', self_id: '', enabled: true })
 }
 
 function removeBot(idx: number) {
@@ -115,16 +175,41 @@ function removeBot(idx: number) {
 async function saveBot() {
   savingBot.value = true
   try {
-    const onebot11: { mode?: string; url: string; access_token: string; self_id: string }[] = []
-    const telegram: string[] = []
-    const satori: { url: string; token: string; self_id: string; api_url: string }[] = []
+    const onebot11: { mode?: string; url: string; access_token: string; self_id: string; enabled?: boolean }[] = []
+    const telegram: { token: string; enabled?: boolean }[] = []
+    const satori: { url: string; token: string; self_id: string; api_url: string; enabled?: boolean }[] = []
     for (const conn of botConns.value) {
       if (conn.platform === 'onebot11') {
-        onebot11.push({ mode: conn.mode || 'reverse', url: conn.url || '', access_token: conn.access_token || '', self_id: conn.self_id || '' })
+        // 根据模式规范化 URL
+        let url = conn.url || ''
+        const mode = conn.mode || 'reverse'
+        if (mode === 'forward') {
+          url = url.replace(/^wss?:\/\//, '')   // forward 不需要 ws:// 前缀
+        } else if (url && !/^wss?:\/\//.test(url)) {
+          url = 'ws://' + url                    // reverse 必须带 ws://
+        }
+        onebot11.push({
+          mode,
+          url,
+          access_token: conn.access_token || '',
+          self_id: conn.self_id || '',
+          ...(conn.enabled === false ? { enabled: false } : {}),
+        })
       } else if (conn.platform === 'telegram') {
-        if (conn.token) telegram.push(conn.token)
+        if (conn.token) {
+          telegram.push({
+            token: conn.token,
+            ...(conn.enabled === false ? { enabled: false } : {}),
+          })
+        }
       } else if (conn.platform === 'satori') {
-        satori.push({ url: conn.url || '', token: conn.token || '', self_id: conn.self_id || '', api_url: conn.api_url || '' })
+        satori.push({
+          url: conn.url || '',
+          token: conn.token || '',
+          self_id: conn.self_id || '',
+          api_url: conn.api_url || '',
+          ...(conn.enabled === false ? { enabled: false } : {}),
+        })
       }
     }
     await saveConfig({
@@ -139,6 +224,43 @@ async function saveBot() {
     toast.show(e.message || '保存失败', 'error')
   } finally {
     savingBot.value = false
+  }
+}
+
+async function connectBot(conn: BotConn) {
+  try {
+    await botControl('start', conn.platform, conn.self_id || '')
+    toast.show('已发送连接指令', 'success')
+    setTimeout(fetchBotStatus, 2000)
+  } catch (e: any) {
+    toast.show(e.message || '连接失败', 'error')
+  }
+}
+
+async function disconnectBot(conn: BotConn) {
+  try {
+    await botControl('stop', conn.platform, conn.self_id || '')
+    toast.show('已发送断开指令', 'success')
+    setTimeout(fetchBotStatus, 1500)
+  } catch (e: any) {
+    toast.show(e.message || '断开失败', 'error')
+  }
+}
+
+function toggleEnabled(conn: BotConn) {
+  conn.enabled = !conn.enabled
+}
+
+function onModeChanged(conn: BotConn) {
+  if (conn.mode === 'forward') {
+    // 反向 WS 模式（等待服务端连接）：去掉 ws:// 前缀，保留监听地址
+    conn.url = (conn.url || '').replace(/^wss?:\/\//, '')
+    if (!conn.url) conn.url = ':6700'
+  } else {
+    // 正向 WS 模式（连接远程服务器）：如果没有 ws:// 前缀则加上
+    if (conn.url && !/^wss?:\/\//.test(conn.url)) {
+      conn.url = 'ws://' + conn.url
+    }
   }
 }
 </script>
@@ -256,23 +378,81 @@ async function saveBot() {
         <div
           v-for="(conn, idx) in botConns"
           :key="idx"
-          class="rounded-lg border border-zinc-100 bg-zinc-50/50 p-4"
+          :class="conn.enabled ? 'border-zinc-100 bg-zinc-50/50' : 'border-zinc-100 bg-zinc-100/60 opacity-75'"
+          class="rounded-lg border p-4"
         >
-          <div class="mb-3 flex items-center justify-between">
-            <select
-              v-model="conn.platform"
-              class="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs outline-none focus:border-red-400"
-            >
-              <option value="onebot11">OneBot 11</option>
-              <option value="telegram">Telegram</option>
-              <option value="satori">Satori</option>
-            </select>
-            <button
-              @click="removeBot(idx)"
-              class="text-xs text-red-500 hover:text-red-700"
-            >
-              ✕ 删除
-            </button>
+          <!-- 头部：平台选择 + 启用开关 + 状态 + 操作按钮 -->
+          <div class="mb-3 flex items-center justify-between gap-2 flex-wrap">
+            <div class="flex items-center gap-2">
+              <select
+                v-model="conn.platform"
+                class="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs outline-none focus:border-red-400"
+              >
+                <option value="onebot11">OneBot 11</option>
+                <option value="telegram">Telegram</option>
+                <option value="satori">Satori</option>
+              </select>
+
+              <!-- 启用/禁用 切换 -->
+              <button
+                @click="toggleEnabled(conn)"
+                :class="conn.enabled
+                  ? 'bg-green-600 hover:bg-green-700'
+                  : 'bg-zinc-400 hover:bg-zinc-500'"
+                class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0"
+                :title="conn.enabled ? '点击禁用（下次启动不连接）' : '点击启用'"
+              >
+                <span
+                  :class="conn.enabled ? 'translate-x-5' : 'translate-x-0.5'"
+                  class="inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform"
+                />
+              </button>
+
+              <!-- 状态徽章 -->
+              <template v-if="!conn.enabled">
+                <span class="rounded-full bg-zinc-200 text-zinc-500 px-2 py-0.5 text-[11px] font-medium">已禁用</span>
+              </template>
+              <template v-else>
+                <span
+                  v-if="getBotStatus(conn)?.running"
+                  class="rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-[11px] font-medium"
+                >● 已连接</span>
+                <span
+                  v-else-if="getBotStatus(conn)"
+                  class="rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-[11px] font-medium"
+                >● 未连接</span>
+                <span
+                  v-else
+                  class="rounded-full bg-zinc-100 text-zinc-400 px-2 py-0.5 text-[11px] font-medium"
+                >未启动</span>
+              </template>
+            </div>
+
+            <div class="flex items-center gap-1.5">
+              <!-- 连接/断开 按钮 -->
+              <template v-if="conn.enabled">
+                <button
+                  v-if="getBotStatus(conn)?.running"
+                  @click="disconnectBot(conn)"
+                  class="rounded-lg border border-red-200 text-red-600 px-2.5 py-1 text-xs font-medium hover:bg-red-50 transition-colors"
+                >断开</button>
+                <button
+                  v-else
+                  @click="connectBot(conn)"
+                  class="rounded-lg border border-green-200 text-green-600 px-2.5 py-1 text-xs font-medium hover:bg-green-50 transition-colors"
+                >连接</button>
+              </template>
+              <template v-else>
+                <span class="text-[11px] text-zinc-400 italic">需启用后连接</span>
+              </template>
+
+              <!-- 删除 -->
+              <button
+                @click="removeBot(idx)"
+                class="text-xs text-red-500 hover:text-red-700 px-1"
+                title="删除此连接"
+              >✕</button>
+            </div>
           </div>
 
           <!-- OneBot 11 字段 -->
@@ -281,10 +461,11 @@ async function saveBot() {
               <label class="mb-1 block text-[11px] font-medium text-zinc-500">连接模式</label>
               <select
                 v-model="conn.mode"
+                @change="onModeChanged(conn)"
                 class="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-xs outline-none focus:border-red-400"
               >
-                <option value="reverse">反向 WS（连接远程服务器）</option>
-                <option value="forward">正向 WS（等待客户端连接）</option>
+                <option value="reverse">正向 WS（连接远程服务器）</option>
+                <option value="forward">反向 WS（等待服务端连接）</option>
               </select>
             </div>
             <div class="mb-2">
@@ -369,7 +550,7 @@ async function saveBot() {
         >
           {{ savingBot ? '保存中...' : '💾 保存机器人配置' }}
         </button>
-        <p class="text-[11px] text-zinc-400">修改后需重启程序生效</p>
+        <p class="text-[11px] text-zinc-400">禁用/启用需保存后重启生效；连接/断开为即时操作</p>
       </div>
     </div>
   </div>

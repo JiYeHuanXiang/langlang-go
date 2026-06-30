@@ -19,6 +19,7 @@ type Package struct {
 	Code      string    `json:"code"`
 	Lang      string    `json:"lang"`
 	Enabled   bool      `json:"enabled"`
+	Bots      []string  `json:"bots,omitempty"` // 绑定的机器人列表（platform:self_id），空表示全部
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -86,7 +87,7 @@ func (m *Manager) LoadAll() error {
 }
 
 // Save 保存插件到磁盘
-func (m *Manager) Save(name, code, lang string) error {
+func (m *Manager) Save(name, code, lang string, bots []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -102,6 +103,7 @@ func (m *Manager) Save(name, code, lang string) error {
 	}
 	pkg.Code = code
 	pkg.Lang = lang
+	pkg.Bots = bots
 	pkg.UpdatedAt = now
 
 	return m.writeToDisk(name)

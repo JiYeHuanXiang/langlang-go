@@ -7,6 +7,7 @@ const pageTitles: Record<string, string> = {
   '/plugins': '插件管理',
   '/editor': '脚本编辑',
   '/logs': '运行日志',
+  '/send': '发送消息',
   '/debug': '调试',
   '/settings': '系统设置',
 }

@@ -5,6 +5,7 @@ export interface PluginInfo {
   code: string
   lang: string
   enabled: boolean
+  bots?: string[]
   created_at: string
   updated_at: string
 }
@@ -27,8 +28,8 @@ export function getPlugin(name: string) {
   return api.request<PluginDetailResponse>('GET', `/api/plugin/${encodeURIComponent(name)}`)
 }
 
-export function savePlugin(name: string, code: string, lang = 'redlang') {
-  return api.request('POST', `/api/plugin/${encodeURIComponent(name)}`, { code, lang })
+export function savePlugin(name: string, code: string, lang = 'redlang', bots?: string[]) {
+  return api.request('POST', `/api/plugin/${encodeURIComponent(name)}`, { code, lang, bots: bots || [] })
 }
 
 export function deletePlugin(name: string) {

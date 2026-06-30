@@ -2,18 +2,26 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePluginsStore } from '../stores/plugins'
+import { useBotsStore } from '../stores/bots'
 import { useToast } from '../composables/useToast'
 import { runScript, stopScript } from '../api/script'
 import CodeEditor from '../components/CodeEditor.vue'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import OutputPanel from '../components/OutputPanel.vue'
 import type { LogLine } from '../components/OutputPanel.vue'
-import { Play, Square, Clock, FileCode, Upload } from 'lucide-vue-next'
+import { Play, Square, Clock, FileCode, Upload, Bot } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
 const pluginsStore = usePluginsStore()
+const botsStore = useBotsStore()
 const toast = useToast()
+
+const platformLabels: Record<string, string> = {
+  onebot11: 'OB11',
+  telegram: 'TG',
+  satori: 'Satori',
+}
 
 const EXAMPLE_RED = `【赋值】@问候@你好，世界！
 【输出】@【取变量】@问候
@@ -52,6 +60,7 @@ const deleteTarget = ref<string | null>(null)
 const saving = ref(false)
 const selectedPkg = ref<any>(null)
 const importFileInput = ref<HTMLInputElement | null>(null)
+const selectedBots = ref<string[]>([])
 
 // Script run state
 const scriptRunning = ref(false)
@@ -70,7 +79,7 @@ const filteredPlugins = computed(() => {
 const runTimeout = ref(10)
 
 onMounted(async () => {
-  await pluginsStore.fetchAll()
+  await Promise.all([pluginsStore.fetchAll(), botsStore.fetchStatus()])
   const name = (route.query.name as string) || ''
   if (name) {
     pluginName.value = name
@@ -96,10 +105,12 @@ async function loadPlugin(name: string) {
     code.value = pkg.code || ''
     lang.value = (pkg.lang as any) || 'redlang'
     selectedPkg.value = pkg
+    selectedBots.value = pkg.bots || []
     dirty.value = false
   } else {
     code.value = ''
     selectedPkg.value = null
+    selectedBots.value = []
     dirty.value = false
   }
 }
@@ -122,7 +133,7 @@ async function save() {
   }
   saving.value = true
   try {
-    await pluginsStore.save(pluginName.value.trim(), code.value, lang.value)
+    await pluginsStore.save(pluginName.value.trim(), code.value, lang.value, selectedBots.value)
     dirty.value = false
     await pluginsStore.fetchAll()
     const pkg = pluginsStore.plugins.find(p => p.name === pluginName.value.trim())
@@ -196,6 +207,18 @@ async function deletePlugin() {
 function formatTime(t: string) {
   if (!t) return '-'
   return new Date(t).toLocaleString()
+}
+
+// ── Bot Selection ──
+
+function toggleBot(botKey: string) {
+  const idx = selectedBots.value.indexOf(botKey)
+  if (idx >= 0) {
+    selectedBots.value.splice(idx, 1)
+  } else {
+    selectedBots.value.push(botKey)
+  }
+  if (!dirty.value) dirty.value = true
 }
 
 // ── Script Execution ──
@@ -461,6 +484,32 @@ onUnmounted(() => {
           <FileCode :size="12" />
           插入示例
         </button>
+
+        <!-- Bot Selector -->
+        <div class="ml-auto flex items-center gap-1.5">
+          <Bot :size="13" class="text-zinc-400" />
+          <span class="text-[10px] text-zinc-400 mr-0.5">运行于</span>
+          <button
+            v-for="bot in botsStore.bots"
+            :key="`${bot.platform}:${bot.self_id}`"
+            @click="toggleBot(`${bot.platform}:${bot.self_id}`)"
+            :class="[
+              'rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors',
+              selectedBots.includes(`${bot.platform}:${bot.self_id}`)
+                ? 'border-red-300 bg-red-50 text-red-700'
+                : bot.running
+                  ? 'border-zinc-200 text-zinc-500 hover:border-zinc-300 hover:bg-zinc-50'
+                  : 'border-zinc-100 text-zinc-300 cursor-not-allowed'
+            ]"
+            :disabled="!bot.running"
+            :title="bot.running ? `${platformLabels[bot.platform] || bot.platform}:${bot.self_id}` : '机器人未连接'"
+          >
+            {{ platformLabels[bot.platform] || bot.platform }}:{{ bot.self_id }}
+            <span v-if="!bot.running" class="ml-0.5 text-zinc-300">●</span>
+          </button>
+          <span v-if="botsStore.bots.length === 0" class="text-[10px] text-zinc-400">无已连接机器人</span>
+          <span v-else-if="selectedBots.length === 0" class="text-[10px] text-emerald-600">全部</span>
+        </div>
       </div>
 
       <!-- Editor + Output Panel (CSS Grid for reliable height) -->

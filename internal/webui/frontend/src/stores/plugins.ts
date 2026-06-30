@@ -16,8 +16,8 @@ export const usePluginsStore = defineStore('plugins', () => {
     }
   }
 
-  async function save(name: string, code: string, lang: string) {
-    await savePlugin(name, code, lang)
+  async function save(name: string, code: string, lang: string, bots?: string[]) {
+    await savePlugin(name, code, lang, bots)
     await fetchAll()
   }
 

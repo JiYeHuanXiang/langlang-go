@@ -46,6 +46,7 @@ type Server struct {
 	hub          *Hub
 	mu           sync.Mutex
 	running      bool
+	rebuildBots  func() // 保存 bot 配置后触发的重建回调
 }
 
 // NewServer 创建 Web UI 服务器
@@ -81,7 +82,8 @@ func (s *Server) Start() error {
 	mux.Handle("/api/reload", apiAuth(s.handleReload))
 	mux.Handle("/api/validate", apiAuth(s.handleValidate))
 	mux.Handle("/api/messages", apiAuth(s.handleMessages))
-	mux.Handle("/api/bot/", s.cors(http.HandlerFunc(s.handleBot)))
+	mux.Handle("/api/bot/", apiAuth(s.handleBot))
+	mux.Handle("/api/bot/send", apiAuth(s.handleBotSend))
 	mux.Handle("/api/testmode", apiAuth(s.handleTestMode))
 	mux.Handle("/ws", s.cors(http.HandlerFunc(s.handleWebSocket)))
 	mux.Handle("/api/debug/message", apiAuth(s.handleDebugMessage))
@@ -143,6 +145,11 @@ func (s *Server) SetBotControl(registry *bot.Registry, adapters []bot.BotAdapter
 // SetConfigPath 设置配置文件路径（用于保存时写回正确文件）
 func (s *Server) SetConfigPath(path string) {
 	s.configPath = path
+}
+
+// SetRebuildBotConnectors 设置 bot 配置保存后的重建回调
+func (s *Server) SetRebuildBotConnectors(fn func()) {
+	s.rebuildBots = fn
 }
 
 func (s *Server) BroadcastLog(level, msg string) {
@@ -308,14 +315,15 @@ func (s *Server) handlePlugin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req struct {
-			Code string `json:"code"`
-			Lang string `json:"lang"`
+			Code string   `json:"code"`
+			Lang string   `json:"lang"`
+			Bots []string `json:"bots"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "invalid json"})
 			return
 		}
-		if err := s.plugins.Save(name, req.Code, req.Lang); err != nil {
+		if err := s.plugins.Save(name, req.Code, req.Lang, req.Bots); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"code": -1, "msg": err.Error()})
 			return
 		}
@@ -419,7 +427,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if telegramRaw, has := hasKey(botData, "telegram"); has {
-				var telegrams []string
+				var telegrams []config.TelegramConfig
 				if err := json.Unmarshal(telegramRaw, &telegrams); err == nil {
 					s.cfg.Bot.Telegram = telegrams
 				}
@@ -435,6 +443,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if err := s.cfg.Save(s.configPath); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"code": -1, "msg": err.Error()})
 			return
+		}
+		// bot 配置变更后重建连接器
+		if _, hasBot := raw["bot"]; hasBot && s.rebuildBots != nil {
+			s.rebuildBots()
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"code": 0, "msg": "配置已保存"})
 
@@ -587,6 +599,18 @@ func (s *Server) handleBot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	adapter, ok := s.botRegistry.Get(req.Platform, req.SelfID)
+	if !ok {
+		// self_id 为空时（UI 表单未填），从适配器列表中查找同平台的任意适配器
+		if req.SelfID == "" {
+			for _, a := range s.botAdapters {
+				if a.Platform() == req.Platform {
+					adapter = a
+					ok = true
+					break
+				}
+			}
+		}
+	}
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]any{"code": -1, "msg": "adapter not found"})
 		return
@@ -749,6 +773,69 @@ func (s *Server) handleDebugMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code": 0,
 		"msg":  "调试消息已发送",
+	})
+}
+
+// ==================== API: 发送消息 ====================
+
+func (s *Server) handleBotSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"code": -1, "msg": "method not allowed"})
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "read body failed"})
+		return
+	}
+	var req struct {
+		Platform   string `json:"platform"`
+		SelfID     string `json:"self_id"`
+		TargetType string `json:"target_type"` // "private" 或 "group"
+		TargetID   string `json:"target_id"`
+		Message    string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "invalid json"})
+		return
+	}
+
+	if req.Platform == "" || req.SelfID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "platform and self_id are required"})
+		return
+	}
+	if req.TargetID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "target_id is required"})
+		return
+	}
+	if req.Message == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": -1, "msg": "message is required"})
+		return
+	}
+
+	params := map[string]any{
+		"message": req.Message,
+	}
+	if req.TargetType == "group" {
+		params["message_type"] = "group"
+		params["group_id"] = req.TargetID
+	} else {
+		params["message_type"] = "private"
+		params["user_id"] = req.TargetID
+	}
+
+	result, err := s.botRegistry.CallAPI(req.Platform, req.SelfID, "send_msg", params)
+	if err != nil {
+		log.Error("发送消息失败", "platform", req.Platform, "target", req.TargetID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": -1, "msg": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"code":   0,
+		"msg":    "消息已发送",
+		"result": result,
 	})
 }
 

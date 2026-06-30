@@ -13,6 +13,7 @@ import (
 	"github.com/jiyehuanxiang/langlang-go/internal/log"
 	"github.com/jiyehuanxiang/langlang-go/internal/mqtt"
 	"github.com/jiyehuanxiang/langlang-go/internal/plugin"
+	"github.com/jiyehuanxiang/langlang-go/internal/redlang"
 	"github.com/jiyehuanxiang/langlang-go/internal/webui"
 )
 
@@ -46,6 +47,7 @@ func NewApp(cfg *config.Config, configPath string) *App {
 	// 创建 Web UI 服务器
 	app.webui = webui.NewServer(cfg, app.plugins)
 	app.webui.SetConfigPath(configPath)
+	app.webui.SetRebuildBotConnectors(app.rebuildBotConnectors)
 	// db 和 botConnectors 会在后面的构造中赋值
 	// (在 Start() 前通过 SetDB/SetBotControl 注入)
 
@@ -60,9 +62,21 @@ func NewApp(cfg *config.Config, configPath string) *App {
 
 	// 创建机器人连接器
 	app.botConnectors = make([]bot.BotAdapter, 0)
+	app.buildConnectors()
 
-	for _, ob := range cfg.Bot.OneBot11 {
+	return app
+}
+
+// buildConnectors 从当前 config 构建所有 bot 连接器，并放回 app.botConnectors
+func (a *App) buildConnectors() {
+	connectors := make([]bot.BotAdapter, 0)
+
+	for _, ob := range a.cfg.Bot.OneBot11 {
 		if ob.URL == "" {
+			continue
+		}
+		if !ob.IsEnabled() {
+			log.Info("跳过已禁用的 OneBot11 连接", "url", ob.URL, "self_id", ob.SelfID)
 			continue
 		}
 		mode := ob.Mode
@@ -70,26 +84,63 @@ func NewApp(cfg *config.Config, configPath string) *App {
 			mode = "reverse"
 		}
 		conn := onebot11.NewConnector(mode, ob.URL, ob.AccessToken, ob.SelfID)
-		app.botConnectors = append(app.botConnectors, conn)
+		connectors = append(connectors, conn)
 	}
 
-	for _, token := range cfg.Bot.Telegram {
-		if token == "" {
+	for _, tg := range a.cfg.Bot.Telegram {
+		if tg.Token == "" {
 			continue
 		}
-		conn := telegram.NewConnector(token)
-		app.botConnectors = append(app.botConnectors, conn)
+		if !tg.IsEnabled() {
+			log.Info("跳过已禁用的 Telegram 连接", "token_prefix", tg.Token[:min(8, len(tg.Token))]+"...")
+			continue
+		}
+		conn := telegram.NewConnector(tg.Token)
+		connectors = append(connectors, conn)
 	}
 
-	for _, sc := range cfg.Bot.Satori {
+	for _, sc := range a.cfg.Bot.Satori {
 		if sc.URL == "" {
 			continue
 		}
+		if !sc.IsEnabled() {
+			log.Info("跳过已禁用的 Satori 连接", "url", sc.URL, "self_id", sc.SelfID)
+			continue
+		}
 		conn := satori.NewConnector(sc.URL, sc.Token, sc.SelfID, sc.APIURL)
-		app.botConnectors = append(app.botConnectors, conn)
+		connectors = append(connectors, conn)
 	}
 
-	return app
+	a.botConnectors = connectors
+}
+
+// rebuildBotConnectors 停止旧连接，从 config 重建并重新注册所有 bot 连接器
+func (a *App) rebuildBotConnectors() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if !a.running {
+		return
+	}
+
+	log.Info("正在重建 bot 连接器...")
+
+	// 停止旧连接并从注册表中注销
+	for _, adapter := range a.botConnectors {
+		a.botReg.Unregister(adapter.Platform(), adapter.SelfID())
+		adapter.Stop()
+	}
+
+	// 重建
+	a.buildConnectors()
+
+	// 同步给 WebUI
+	a.webui.SetBotControl(a.botReg, a.botConnectors)
+
+	// 重新启动
+	a.startBotConnections()
+
+	log.Info("bot 连接器重建完成", "count", len(a.botConnectors))
 }
 
 // Start 启动应用
@@ -106,6 +157,11 @@ func (a *App) Start() error {
 	// 0. 注入 DB / Bot 引用到 Web UI
 	a.webui.SetDB(a.db)
 	a.webui.SetBotControl(a.botReg, a.botConnectors)
+
+	// 接线脚本运行时的 BotAPI（之前是 stub）
+	redlang.GlobalApp.BotAPI = func(platform, selfID, action string, params map[string]any) (map[string]any, error) {
+		return a.botReg.CallAPI(platform, selfID, action, params)
+	}
 
 	// 1. 启动数据库
 	if err := a.db.Open(); err != nil {

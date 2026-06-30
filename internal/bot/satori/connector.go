@@ -89,6 +89,8 @@ func (c *Connector) Start() error {
 		return fmt.Errorf("already running")
 	}
 
+	// 重置 stopCh（Stop() 会关闭旧通道，这里创建新的以支持重启）
+	c.stopCh = make(chan struct{})
 	c.running = true
 	go c.connectLoop()
 
@@ -107,6 +109,7 @@ func (c *Connector) Stop() {
 	close(c.stopCh)
 	if c.conn != nil {
 		c.conn.Close()
+		c.conn = nil
 	}
 }
 
@@ -354,8 +357,12 @@ func (c *Connector) handleEvent(body json.RawMessage) {
 	// 从事件中获取 self_id（如果尚未设置）
 	if c.selfID == "" && evt.SelfID != "" {
 		c.mu.Lock()
+		oldSelfID := c.selfID
 		c.selfID = evt.SelfID
 		c.mu.Unlock()
+		// 同步更新全局注册表
+		bot.GlobalRegistry.Unregister(c.Platform(), oldSelfID)
+		bot.GlobalRegistry.Register(c)
 	}
 
 	// 映射为 OneBot 风格的事件字段

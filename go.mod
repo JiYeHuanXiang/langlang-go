@@ -3,6 +3,7 @@ module github.com/jiyehuanxiang/langlang-go
 go 1.25
 
 require (
+	github.com/dop251/goja v0.0.0-20260629171413-2a84ae0cf10d
 	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/robfig/cron/v3 v3.0.1
@@ -12,7 +13,6 @@ require (
 
 require (
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
-	github.com/dop251/goja v0.0.0-20260629171413-2a84ae0cf10d // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/google/pprof v0.0.0-20240409012703-83162a5b38cd // indirect

@@ -1,5 +1,5 @@
 // Package onebot11 实现 OneBot 11 协议。
-// 同时支持反向 WebSocket（连接远程服务器）和正向 WebSocket（等待客户端连接）。
+// 同时支持正向 WebSocket（连接远程服务器）和反向 WebSocket（等待服务端连接）。
 package onebot11
 
 import (
@@ -28,6 +28,8 @@ type Connector struct {
 	mu          sync.Mutex
 	running     bool
 	stopCh      chan struct{}
+	disconnCh   chan struct{} // readLoop 退出时关闭，通知 connectLoop
+	serveDone   chan struct{} // serveForward goroutine 退出时关闭，确保端口已释放
 	dialer      *websocket.Dialer
 	server      *http.Server // forward 模式用的 HTTP 服务
 
@@ -77,8 +79,11 @@ func (c *Connector) Start() error {
 		return fmt.Errorf("already running")
 	}
 
+	// 重置 stopCh（Stop() 会关闭旧通道，这里创建新的以支持重启）
+	c.stopCh = make(chan struct{})
 	c.running = true
 	if c.mode == "forward" {
+		c.serveDone = make(chan struct{})
 		go c.serveForward()
 	} else {
 		go c.connectLoop()
@@ -90,22 +95,41 @@ func (c *Connector) Start() error {
 // Stop 停止连接
 func (c *Connector) Stop() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.running {
-		return
-	}
+	server := c.server
+	serveDone := c.serveDone
 	c.running = false
-	close(c.stopCh)
+	c.mu.Unlock()
+
+	// 先发停止信号
+	select {
+	case <-c.stopCh:
+		// 已关闭
+	default:
+		close(c.stopCh)
+	}
+
+	c.mu.Lock()
 	if c.conn != nil {
 		c.conn.Close()
+		c.conn = nil
 	}
-	if c.server != nil {
+	c.mu.Unlock()
+
+	if server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		c.server.Shutdown(ctx)
-		c.server = nil
+		server.Shutdown(ctx)
 	}
+
+	// 等待 serve goroutine 退出，确保端口已释放
+	if serveDone != nil {
+		<-serveDone
+	}
+
+	c.mu.Lock()
+	c.server = nil
+	c.serveDone = nil
+	c.mu.Unlock()
 
 	// 清理所有等待中的请求
 	c.pendingMu.Lock()
@@ -249,8 +273,17 @@ func (c *Connector) connect() error {
 		return nil
 	})
 
-	// 消息读取循环
+	// 创建断开信号通道，readLoop 退出时关闭
+	c.disconnCh = make(chan struct{})
+
+	// 消息读取循环（阻塞运行）
 	go c.readLoop(conn)
+
+	// 阻塞等待连接断开，让 connectLoop 在断开后才进行重连
+	select {
+	case <-c.disconnCh:
+	case <-c.stopCh:
+	}
 
 	return nil
 }
@@ -260,17 +293,50 @@ func (c *Connector) serveForward() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", c.handleWSUpgrade)
 
+	// 剥离 ws:// / wss:// 前缀，提取 host:port
+	listenAddr := c.url
+	if u, err := url.Parse(c.url); err == nil && u.Host != "" {
+		listenAddr = u.Host
+	}
+
 	c.mu.Lock()
 	c.server = &http.Server{
-		Addr:    c.url,
+		Addr:    listenAddr,
 		Handler: mux,
 	}
 	c.mu.Unlock()
 
-	log.Info("OneBot11 正向 WS 服务启动", "listen", c.url)
-	err := c.server.ListenAndServe()
+	log.Info("OneBot11 反向 WS 服务启动", "listen", listenAddr)
+
+	// 带重试的 ListenAndServe，应对端口释放延迟（Windows 尤为常见）
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		err = c.server.ListenAndServe()
+		if err == http.ErrServerClosed {
+			break
+		}
+		if err == nil {
+			break
+		}
+		// 绑定失败，等待后重试
+		log.Warn("OneBot11 反向 WS 绑定失败，即将重试",
+			"listen", listenAddr,
+			"error", err,
+			"attempt", attempt+1,
+		)
+		backoff := time.Duration(100*(1<<attempt)) * time.Millisecond
+		select {
+		case <-c.stopCh:
+			break
+		case <-time.After(backoff):
+		}
+	}
 	if err != nil && err != http.ErrServerClosed {
-		log.Error("OneBot11 正向 WS 服务异常", "error", err)
+		log.Error("OneBot11 反向 WS 服务异常", "error", err)
+	}
+	// 通知 Stop() serve goroutine 已退出，端口已释放
+	if c.serveDone != nil {
+		close(c.serveDone)
 	}
 }
 
@@ -306,7 +372,7 @@ func (c *Connector) handleWSUpgrade(w http.ResponseWriter, r *http.Request) {
 	c.conn = conn
 	c.mu.Unlock()
 
-	log.Info("OneBot11 正向 WS 客户端已连接")
+	log.Info("OneBot11 反向 WS 客户端已连接")
 
 	// 设置 ping/pong 检测
 	conn.SetPongHandler(func(string) error {
@@ -327,6 +393,16 @@ func (c *Connector) readLoop(conn *websocket.Conn) {
 		c.mu.Unlock()
 		conn.Close()
 		log.Warn("OneBot11 连接已断开", "url", c.url)
+
+		// 通知 connectLoop 连接已断开，可以重连
+		if c.disconnCh != nil {
+			select {
+			case <-c.disconnCh:
+				// 已关闭
+			default:
+				close(c.disconnCh)
+			}
+		}
 	}()
 
 	for {
@@ -391,8 +467,25 @@ func (c *Connector) handleMessage(data []byte) {
 		return
 	}
 
-	// 忽略原生心跳等元事件
+	// 忽略原生心跳等元事件，但提取 lifecycle 中的 self_id
 	if postType, ok := raw["post_type"].(string); ok && postType == "meta_event" {
+		// 从 lifecycle connect 事件中提取 self_id
+		if metaType, ok := raw["meta_event_type"].(string); ok && metaType == "lifecycle" {
+			if subType, ok := raw["sub_type"].(string); ok && subType == "connect" {
+				if selfID, ok := raw["self_id"].(float64); ok && selfID > 0 {
+					c.mu.Lock()
+					if c.selfID == "" {
+						oldSelfID := c.selfID
+						c.selfID = strconv.FormatInt(int64(selfID), 10)
+						log.Info("OneBot11 自动获取到 self_id", "self_id", c.selfID)
+						// 同步更新全局注册表，使 send API 能通过新 self_id 找到适配器
+						bot.GlobalRegistry.Unregister(c.Platform(), oldSelfID)
+						bot.GlobalRegistry.Register(c)
+					}
+					c.mu.Unlock()
+				}
+			}
+		}
 		return
 	}
 

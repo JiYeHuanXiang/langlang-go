@@ -46,9 +46,9 @@ type WebConfig struct {
 }
 
 type BotConfig struct {
-	OneBot11 []OneBot11Config `json:"onebot11"`
-	Telegram []string         `json:"telegram"`
-	Satori   []SatoriConfig   `json:"satori"`
+	OneBot11 []OneBot11Config  `json:"onebot11"`
+	Telegram []TelegramConfig  `json:"telegram"`
+	Satori   []SatoriConfig    `json:"satori"`
 }
 
 type OneBot11Config struct {
@@ -56,6 +56,39 @@ type OneBot11Config struct {
 	URL         string `json:"url"`
 	AccessToken string `json:"access_token"`
 	SelfID      string `json:"self_id"`
+	Enabled     *bool  `json:"enabled,omitempty"`
+}
+
+// IsEnabled 返回连接器是否启用（nil 视为启用，向后兼容）
+func (c OneBot11Config) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// TelegramConfig Telegram Bot 连接配置
+type TelegramConfig struct {
+	Token   string `json:"token"`
+	Enabled *bool  `json:"enabled,omitempty"`
+}
+
+// UnmarshalJSON 支持向后兼容：旧格式为纯字符串 "token"，新格式为对象 {"token":"...","enabled":true}
+func (c *TelegramConfig) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		c.Token = s
+		return nil
+	}
+	type Alias TelegramConfig
+	var a Alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*c = TelegramConfig(a)
+	return nil
+}
+
+// IsEnabled 返回连接器是否启用（nil 视为启用，向后兼容）
+func (c TelegramConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // SatoriConfig Satori 协议连接配置
@@ -64,6 +97,12 @@ type SatoriConfig struct {
 	Token   string `json:"token"`
 	SelfID  string `json:"self_id"`
 	APIURL  string `json:"api_url"`
+	Enabled *bool  `json:"enabled,omitempty"`
+}
+
+// IsEnabled 返回连接器是否启用（nil 视为启用，向后兼容）
+func (c SatoriConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 type MQTTConfig struct {
